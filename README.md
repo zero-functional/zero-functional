@@ -1,6 +1,6 @@
 # zero-functional
 
-A library providing zero-cost chaining functional abstractions in Nim.
+A library providing (almost) zero-cost chaining functional abstractions in Nim.
 
 ```nim
 var n = zip(a, b) -->
