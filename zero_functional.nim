@@ -191,12 +191,14 @@ proc connectHandler(args: NimNode): NimNode =
   var code = result[^1]
   var initials = nnkStmtList.newTree()
   result[^1].add(initials)
-  for index, arg in args:
+  var index = 0
+  for arg in args:
     var last = index == len(args) - 1
     var (res, newCode) = inlineElement(arg, index, last, initials)
     code.add(res)
     if newCode != nil:
       code = newCode
+    index += 1
   result = nnkCall.newTree(result)
   # echo repr(result)
 
@@ -211,9 +213,11 @@ macro `-->`*(a: untyped, b: untyped): untyped =
   while node.kind == nnkCall:
     if node[0].kind == nnkDotExpr:
       m.add(nnkCall.newTree(node[0][^1]))
-      for z, b in node:
+      var z = 0
+      for b in node:
         if z > 0:
           m[^1].add(b)
+        z += 1
       node = node[0][0]
     elif node[0].kind == nnkIdent:
       m.add(node)
