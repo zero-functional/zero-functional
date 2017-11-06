@@ -50,7 +50,7 @@ proc inlineZip(a: NimNode, index: int, last: bool): (NimNode, NimNode) =
   var q = quote:
     var minHigh = `m`
     var `emptyIdent` = true
-    for `zIdent` in low(a)..minHigh:
+    for `zIdent` in 0..minHigh:
       var `itIdent` = `p`
       # (`a`[`zIdent`], `b`[`zIdent`])
   result = (q, q[2][^1])
