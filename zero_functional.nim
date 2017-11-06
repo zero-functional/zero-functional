@@ -41,10 +41,12 @@ proc inlineZip(a: NimNode, index: int, last: bool): (NimNode, NimNode) =
   var emptyIdent = newIdentNode(!"empty")
   var m = nnkCall.newTree(newIdentNode(!"min"), nnkBracket.newTree())
   var p = nnkPar.newTree()
-  for z, arg in a:
+  var z = 0
+  for arg in a:
     if z > 0:
       m[^1].add(nnkCall.newTree(newIdentNode("high"), arg))
       p.add(nnkBracketExpr.newTree(arg, zIdent))
+    z += 1
   var q = quote:
     var minHigh = `m`
     var `emptyIdent` = true
