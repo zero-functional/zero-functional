@@ -81,6 +81,20 @@ of technical reasons to punish functional style like that.
 This library can expand functional chains to simple loops fuzing the method bodies one after another.
 it's still very experimental, but it shows such an purely metaprogramming approach can be used to optimize functional Nim code
 
+## install
+
+It should work on the C and the JS backend as well
+
+```bash
+nimble install zero_functional
+```
+
+or
+
+```bash
+zero_functional >= 0.0.3`
+```
+
 ## Supported methods
 
 Those are not exactly the functions from sequtils, they have the some naming and almost the same behavior
