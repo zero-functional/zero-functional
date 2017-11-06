@@ -2,8 +2,6 @@ import strutils, sequtils, macros
 
 proc connectFunction: NimNode {.compileTime.} =
   var empty = newEmptyNode()
-  var returnType = quote:
-    seq[int]
   result = nnkLambda.newTree(
     empty,
     empty,
@@ -12,10 +10,6 @@ proc connectFunction: NimNode {.compileTime.} =
     empty,
     empty,
     nnkStmtList.newTree())
-  var resultIdent = newIdentNode(!"result")
-  var initResult = quote:
-    `resultIdent` = @[]
-
 
 proc itNode(index: int): NimNode {.compileTime.} =
   newIdentNode(!("it$1" % $index))
@@ -153,9 +147,11 @@ proc inlineSeq(node: NimNode, last: bool): (NimNode, NimNode) =
   var zIdent = newIdentNode(!"z")
   var emptyIdent = newIdentNode(!"empty")
   var q = quote:
-    for `zIdent` in `node`:
-      var `itIdent` = `node`[`zIdent`]
-  result = (q, q[^1])
+    var `emptyIdent` = true
+    for `zIdent`, `itIdent` in `node`:
+      nil
+  q[1][^1].del(0, 1)
+  result = (q, q[1][^1])
 
 proc ensureLast(label: string, last: bool, node: NimNode) =
   if not last:
@@ -227,4 +223,4 @@ macro `-->`*(a: untyped, b: untyped): untyped =
     m2.add(m[z])
   var mad = nnkArgList.newTree(m2)
   result = connectHandler(mad)
-
+  # echo repr(result)

@@ -1,4 +1,4 @@
-version         = "0.0.1"
+version         = "0.0.2"
 packageName     = "zero-functional"
 author          = "Alexander Ivanov"
 description     = "a library providing zero-cost for chaining functional abstractions in Nim."
