@@ -1,2 +1,9 @@
 zero_functional
 nimcache
+benchmarks/test_nim
+benchmarks/test_sequtils_nim
+benchmarks/test_cpp
+benchmarks/test_crystal
+benchmarks/test.exe
+benchmarks/test_rust
+node_modules/
