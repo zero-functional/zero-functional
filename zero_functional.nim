@@ -35,10 +35,9 @@ proc adapt(node: var NimNode, index: int, aIndex: int): NimNode =
     node.del(0, len(node) div 2)
     return node
 
-proc inlineZip(a: NimNode, index: int, last: bool): (NimNode, NimNode) =
+proc inlineZip(a: NimNode, index: int): (NimNode, NimNode) =
   var itIdent = itNode(index)
   var zIdent = newIdentNode(!"z")
-  var emptyIdent = newIdentNode(!"empty")
   var m = nnkCall.newTree(newIdentNode(!"min"), nnkBracket.newTree())
   var p = nnkPar.newTree()
   var z = 0
@@ -49,11 +48,9 @@ proc inlineZip(a: NimNode, index: int, last: bool): (NimNode, NimNode) =
     z += 1
   var q = quote:
     var minHigh = `m`
-    var `emptyIdent` = true
     for `zIdent` in 0..minHigh:
       var `itIdent` = `p`
-      # (`a`[`zIdent`], `b`[`zIdent`])
-  result = (q, q[2][^1])
+  result = (q, q[1][^1])
 
 proc inlineMap(f: NimNode, index: int, last: bool, indexed: bool): (NimNode, NimNode) =
   var itIdent = itNode(index)
@@ -87,24 +84,33 @@ proc inlineFilter(test: NimNode, index: int, last: bool): (NimNode, NimNode) =
   var emptyIdent = newIdentNode(!"empty")
   var adaptedTest = test
   adaptedTest = adapt(adaptedTest, index - 1, -1)
-  var q: NimNode
   if last:
     var resultIdent = newIdentNode(!"result")
-    q = quote:
+    let q = quote:
       if `adaptedTest`:
         if `emptyIdent`:
           `emptyIdent` = false
           `resultIdent` = @[`itPreviousIdent`]
         else:
           `resultIdent`.add(`itPreviousIdent`)
+    result = (q, q[0][^1])
   else:
-    q = quote:
+    let q = quote:
       if `adaptedTest`:
-        var `itIdent` = `itPreviousIdent`
-  result = (q, q[0][^1])
+        let `itIdent` = `itPreviousIdent`
+    #[
+        check with echo(treeRepr(q))
 
-proc inlineAny(test: NimNode, index: int): (NimNode, NimNode) =
-  var itIdent = itNode(index)
+        StmtList (q)
+            IfStmt (q[0])
+                ElifBranch (q[0][0])
+                    <<Conditition>>
+                    StmtList (q[0][0][1])
+                        <<LetSection>>..
+    ]#
+    result = (q, q[0][0][^1])
+
+proc inlineExists(test: NimNode, index: int): (NimNode, NimNode) =
   var adaptedTest = test
   adaptedTest = adapt(adaptedTest, index - 1, -1)
   var resultIdent = newIdentNode(!"result")
@@ -115,7 +121,6 @@ proc inlineAny(test: NimNode, index: int): (NimNode, NimNode) =
   result = (q, nil)
 
 proc inlineAll(test: NimNode, index: int): (NimNode, NimNode) =
-  var itIdent = itNode(index)
   var adaptedTest = test
   adaptedTest = adapt(adaptedTest, index - 1, -1)
   var resultIdent = newIdentNode(!"result")
@@ -126,7 +131,6 @@ proc inlineAll(test: NimNode, index: int): (NimNode, NimNode) =
   result = (q, nil)
 
 proc inlineFold(initial: NimNode, handler: NimNode, index: int, last: bool, initials: var NimNode): (NimNode, NimNode) =
-  var itIdent = itNode(index)
   var adaptedHandler = handler
   adaptedHandler = adapt(adaptedHandler, index - 1, index)
   var aIdent = aNode(index)
@@ -144,34 +148,41 @@ proc inlineFold(initial: NimNode, handler: NimNode, index: int, last: bool, init
   initials.add(i)
   result = (q, nil)
 
-proc inlineSeq(node: NimNode, last: bool): (NimNode, NimNode) =
+proc inlineEmpty(): NimNode {.compileTime.} =
+  let emptyIdent = newIdentNode(!"empty")
+  result = quote:
+    var `emptyIdent` = true
+
+proc inlineSeq(node: NimNode, needsEmpty: bool): (NimNode, NimNode) =
   var itIdent = itNode(0)
   var zIdent = newIdentNode(!"z")
-  var emptyIdent = newIdentNode(!"empty")
   var q = quote:
-    var `emptyIdent` = true
     for `zIdent`, `itIdent` in `node`:
       nil
-  q[1][^1].del(0, 1)
-  result = (q, q[1][^1])
+  q[0][^1].del(0, 1) # remove nil statement from above quote
+  if needsEmpty:
+    q = inlineEmpty().add(q)
+    result = (q, q[1][0][^1])
+  else:
+    result = (q, q[0][^1])
 
 proc ensureLast(label: string, last: bool, node: NimNode) =
   if not last:
     error("$1 can be only last in a chain" % label, node)
 
-proc inlineElement(node: NimNode, index: int, last: bool, initials: var NimNode): (NimNode, NimNode) =
+proc inlineElement(node: NimNode, index: int, last: bool, needsEmpty: bool, initials: var NimNode): (NimNode, NimNode) =
   if node.kind == nnkCall:
     var label = $node[0]
     case label:
     of "zip":
-      return inlineZip(node, index, last)
+      return inlineZip(node, index)
     of "map":
       return inlineMap(node[1], index, last, false)
     of "filter":
       return inlineFilter(node[1], index, last)
-    of "any":
-      ensureLast("any", last, node)
-      return inlineAny(node[1], index)
+    of "exists":
+      ensureLast("exists", last, node)
+      return inlineExists(node[1], index)
     of "all":
       ensureLast("all", last, node)
       return inlineAll(node[1], index)
@@ -184,23 +195,29 @@ proc inlineElement(node: NimNode, index: int, last: bool, initials: var NimNode)
   else:
     if index != 0:
       error("seq supposed to be first", node)
-    return inlineSeq(node, last)
+    return inlineSeq(node, needsEmpty)
 
 proc connectHandler(args: NimNode): NimNode =
   result = connectFunction()
   var code = result[^1]
   var initials = nnkStmtList.newTree()
   result[^1].add(initials)
+  var needsEmpty = false
+  if args.len > 0 and args[^1].len > 0:
+    let lastCall = $args[^1][0]
+    needsEmpty = (lastCall == "map") or (lastCall == "indexedMap") or (lastCall == "filter")
+    if needsEmpty and args[0].kind == nnkCall:
+      code.add(inlineEmpty())
   var index = 0
   for arg in args:
-    var last = index == len(args) - 1
-    var (res, newCode) = inlineElement(arg, index, last, initials)
+    var last = index == (len(args) - 1)
+    var (res, newCode) = inlineElement(arg, index, last, needsEmpty, initials)
     code.add(res)
     if newCode != nil:
       code = newCode
     index += 1
   result = nnkCall.newTree(result)
-  # echo repr(result)
+  #echo repr(result)
 
 macro connect*(args: varargs[untyped]): untyped =
   result = connectHandler(args)
@@ -230,3 +247,4 @@ macro `-->`*(a: untyped, b: untyped): untyped =
   var mad = nnkArgList.newTree(m2)
   result = connectHandler(mad)
   # echo repr(result)
+
