@@ -137,7 +137,6 @@ let x = [-1,2,-3] => filter(it > 0)
 check(x == [2])
 ```
 
-
 ### zip
 
 `zip` can only be used at the beginning of the command chain and it can work with n sequences
@@ -149,7 +148,7 @@ Check if the given condition is true for at least one element of the list.
 `exists` can be used only at the end of the command chain.
 
 ```nim
-sequence => otherOperations(..).exists(cond)
+sequence => otherOperations(..).exists(cond): bool
 ```
 
 ### all
@@ -159,8 +158,19 @@ Check if the given condition is true for all elements of the list.
 `all` can be used only at the end of the command chain.
 
 ```nim
-sequence => otherOperations(..).all(cond)
+sequence => otherOperations(..).all(cond): bool
 ```
+
+### index
+
+Get the first index of the item in the list, where the given condition is true.
+
+`index` can be used only at the end of the command chain.
+
+```nim
+sequence => otherOperations(..).index(cond): int
+```
+
 
 ### indexedMap
 
