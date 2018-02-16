@@ -121,8 +121,8 @@ sequence => map(op)
 Map each item in the list to a new value.
 Example:
 ```nim
-let x = [1,2,3] => map(it * 2)
-check(x == [2,4,6])
+let x = @[1,2,3] => map(it * 2)
+check(x == @[2,4,6])
 ```
 
 ### filter
@@ -189,7 +189,7 @@ When last command in the chain the result is void.
 As in-between element, the code is simply executed on each element. 
 
 ```nim
-[1,2,3] => 
+@[1,2,3] => 
     foreach(echo($it))
 ```
 
@@ -199,4 +199,3 @@ MIT, Michael Schulte
 
 original license:
 MIT, Alexander Ivanov
-
