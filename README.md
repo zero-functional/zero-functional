@@ -116,14 +116,27 @@ The methods work with auto it variable
 ### map
 
 ```nim
-sequence => map(..)
+sequence => map(op)
+```
+Map each item in the list to a new value.
+Example:
+```nim
+let x = [1,2,3] => map(it * 2)
+check(x == [2,4,6])
 ```
 
 ### filter
 
 ```nim
-sequence => filter(..)
+sequence => filter(cond)
 ```
+Filter the list elements with the given condition.
+Example:
+```nim
+let x = [-1,2,-3] => filter(it > 0)
+check(x == [2])
+```
+
 
 ### zip
 
@@ -131,26 +144,28 @@ zip is more special, it can be for now only in the beginning, and it can work wi
 
 ### exists
 
-exists can be used only finally
+Check if the given condition 
+`exists` can be used only at the end of the command chain.
 
 ```nim
-sequence --> map(..).exists(..)
+sequence => otherOperations(..).exists(cond)
 ```
 
 ### all
 
-all can be used only finally
+Check if the given condition is true for all elements of the list.
+`all` can be used only at the end of the command chain.
 
 ```nim
-sequence --> map(..).all(..)
+sequence => otherOperations(..).all(cond)
 ```
 
 ### indexedMap
 
-Generates a tuple (position, it)
+Generates a tuple (index, it) for each element in the list
 
 ```nim
-var n = zip(a, b, c) -->
+var n = zip(a, b, c) =>
             indexedMap(f(it[0], it[1])).
             filter(it[0] < 10 and it[1] mod 4 > 1).
             map(it[1] * 2).
@@ -159,12 +174,23 @@ var n = zip(a, b, c) -->
 
 ## fold
 
-Currently a left fold (as easier to combine with my technique)
+Currently a left fold (as easier to combine with the implementation)
 
 the sequtils `a` is `_`, `b` is `it`
 
 ```nim
-var n = zip(a, b) --> map(it[0] + it[1]).fold(0, _ + it)
+var n = zip(a, b) => map(it[0] + it[1]).fold(0, _ + it)
+```
+
+## foreach
+
+Can only be used with functions that have side effects.
+When last command in the chain the result is void. 
+As in-between element, the code is simply executed on each element. 
+
+```nim
+[1,2,3] => 
+    foreach(echo($it))
 ```
 
 ### LICENSE
