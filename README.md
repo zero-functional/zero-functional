@@ -1,11 +1,11 @@
 # zero-functional
 
-[![Build Status](https://travis-ci.org/alehander42/zero-functional.svg?branch=master)](https://travis-ci.org/alehander42/zero-functional)
+This is a fork of the original zero-functional from alehander42
 
 A library providing (almost) zero-cost chaining for functional abstractions in Nim.
 
 ```nim
-var n = zip(a, b) -->
+var n = zip(a, b) =>
             map(f(it[0], it[1])).
             filter(it mod 4 > 1).
             map(it * 2).
@@ -81,19 +81,13 @@ of technical reasons to punish functional style like that.
 This library can expand functional chains to simple loops fuzing the method bodies one after another.
 it's still very experimental, but it shows such an purely metaprogramming approach can be used to optimize functional Nim code
 
-## install
+## Variable names
 
-It should work on the C and the JS backend as well
+The supported variable names (can be changed at the beginning of the zero_functional.nim file) are:
 
-```bash
-nimble install zero_functional
-```
+* it - for the iterator variable
+* _ - for the accumulator used in fold
 
-or
-
-```bash
-zero_functional >= 0.0.3`
-```
 
 ## Supported methods
 
@@ -102,19 +96,19 @@ Those are not exactly the functions from sequtils, they have the some naming and
 The macro works as
 
 ```nim
-sequence --> map(..).any(..)
+sequence => map(..).exists(..)
 ```
 
 or 
 
 ```nim
-zip(a, b, c) --> map(..).any(..)
+zip(a, b, c) => map(..).exists(..)
 ```
 
 You can also use 
 
 ```nim
-connect(sequence, map(..), any(..))
+inline_iter(sequence, map(..), exists(..))
 ```
 
 The methods work with auto it variable
@@ -122,41 +116,68 @@ The methods work with auto it variable
 ### map
 
 ```nim
-sequence --> map(..)
+sequence => map(op)
+```
+Map each item in the list to a new value.
+Example:
+```nim
+let x = @[1,2,3] => map(it * 2)
+check(x == @[2,4,6])
 ```
 
 ### filter
 
 ```nim
-sequence --> filter(..)
+sequence => filter(cond)
+```
+Filter the list elements with the given condition.
+Example:
+```nim
+let x = [-1,2,-3] => filter(it > 0)
+check(x == [2])
 ```
 
 ### zip
 
-zip is more special, it can be for now only in the begining, and it can work with n sequences
+`zip` can only be used at the beginning of the command chain and it can work with n sequences
 
-### any
+### exists
 
-any can be used only finally
+Check if the given condition is true for at least one element of the list.
+
+`exists` can be used only at the end of the command chain.
 
 ```nim
-sequence --> map(..).any(..)
+sequence => otherOperations(..).exists(cond): bool
 ```
 
 ### all
 
-all can be used only finally
+Check if the given condition is true for all elements of the list.
+
+`all` can be used only at the end of the command chain.
 
 ```nim
-sequence --> map(..).all(..)
+sequence => otherOperations(..).all(cond): bool
 ```
+
+### index
+
+Get the first index of the item in the list, where the given condition is true.
+
+`index` can be used only at the end of the command chain.
+
+```nim
+sequence => otherOperations(..).index(cond): int
+```
+
 
 ### indexedMap
 
-Generates a tuple (position, it)
+Generates a tuple (index, it) for each element in the list
 
 ```nim
-var n = zip(a, b, c) -->
+var n = zip(a, b, c) =>
             indexedMap(f(it[0], it[1])).
             filter(it[0] < 10 and it[1] mod 4 > 1).
             map(it[1] * 2).
@@ -165,15 +186,29 @@ var n = zip(a, b, c) -->
 
 ## fold
 
-Currently a left fold (as easier to combine with my technique)
+Currently a left fold (as easier to combine with the implementation)
 
-the sequtils `a` is `a`, `b` is `it`
+the sequtils `a` is `_`, `b` is `it`
 
 ```nim
-var n = zip(a, b) --> map(it[0] + it[1]).fold(0, a + it)
+var n = zip(a, b) => map(it[0] + it[1]).fold(0, _ + it)
+```
+
+## foreach
+
+Can only be used with functions that have side effects.
+When last command in the chain the result is void. 
+As in-between element, the code is simply executed on each element. 
+
+```nim
+@[1,2,3] => 
+    foreach(echo($it))
 ```
 
 ### LICENSE
 
+MIT, Michael Schulte
+
+original license:
 MIT, Alexander Ivanov
 
