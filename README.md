@@ -1,11 +1,11 @@
 # zero-functional
 
-[![Build Status](https://travis-ci.org/alehander42/zero-functional.svg?branch=master)](https://travis-ci.org/alehander42/zero-functional)
+This is a fork of the original zero-functional from alehander42
 
 A library providing (almost) zero-cost chaining for functional abstractions in Nim.
 
 ```nim
-var n = zip(a, b) -->
+var n = zip(a, b) =>
             map(f(it[0], it[1])).
             filter(it mod 4 > 1).
             map(it * 2).
@@ -81,19 +81,13 @@ of technical reasons to punish functional style like that.
 This library can expand functional chains to simple loops fuzing the method bodies one after another.
 it's still very experimental, but it shows such an purely metaprogramming approach can be used to optimize functional Nim code
 
-## install
+## Variable names
 
-It should work on the C and the JS backend as well
+The supported variable names (can be changed at the beginning of the zero_functional.nim file) are:
 
-```bash
-nimble install zero_functional
-```
+* it - for the iterator variable
+* _ - for the accumulator used in fold
 
-or
-
-```bash
-zero_functional >= 0.0.3`
-```
 
 ## Supported methods
 
@@ -102,19 +96,19 @@ Those are not exactly the functions from sequtils, they have the some naming and
 The macro works as
 
 ```nim
-sequence --> map(..).any(..)
+sequence => map(..).exists(..)
 ```
 
 or 
 
 ```nim
-zip(a, b, c) --> map(..).any(..)
+zip(a, b, c) => map(..).exists(..)
 ```
 
 You can also use 
 
 ```nim
-connect(sequence, map(..), any(..))
+inline_iter(sequence, map(..), exists(..))
 ```
 
 The methods work with auto it variable
@@ -122,25 +116,25 @@ The methods work with auto it variable
 ### map
 
 ```nim
-sequence --> map(..)
+sequence => map(..)
 ```
 
 ### filter
 
 ```nim
-sequence --> filter(..)
+sequence => filter(..)
 ```
 
 ### zip
 
-zip is more special, it can be for now only in the begining, and it can work with n sequences
+zip is more special, it can be for now only in the beginning, and it can work with n sequences
 
-### any
+### exists
 
-any can be used only finally
+exists can be used only finally
 
 ```nim
-sequence --> map(..).any(..)
+sequence --> map(..).exists(..)
 ```
 
 ### all
@@ -167,13 +161,16 @@ var n = zip(a, b, c) -->
 
 Currently a left fold (as easier to combine with my technique)
 
-the sequtils `a` is `a`, `b` is `it`
+the sequtils `a` is `_`, `b` is `it`
 
 ```nim
-var n = zip(a, b) --> map(it[0] + it[1]).fold(0, a + it)
+var n = zip(a, b) --> map(it[0] + it[1]).fold(0, _ + it)
 ```
 
 ### LICENSE
 
+MIT, Michael Schulte
+
+original license:
 MIT, Alexander Ivanov
 
