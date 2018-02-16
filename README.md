@@ -140,11 +140,12 @@ check(x == [2])
 
 ### zip
 
-zip is more special, it can be for now only in the beginning, and it can work with n sequences
+`zip` can only be used at the beginning of the command chain and it can work with n sequences
 
 ### exists
 
-Check if the given condition 
+Check if the given condition is true for at least one element of the list.
+
 `exists` can be used only at the end of the command chain.
 
 ```nim
@@ -154,6 +155,7 @@ sequence => otherOperations(..).exists(cond)
 ### all
 
 Check if the given condition is true for all elements of the list.
+
 `all` can be used only at the end of the command chain.
 
 ```nim
@@ -199,3 +201,4 @@ MIT, Michael Schulte
 
 original license:
 MIT, Alexander Ivanov
+
