@@ -39,7 +39,7 @@ suite "valid chains":
     check((a => indexedMap(it)) == @[(0, 2), (1, 8), (2, -4)])
 
   test "fold":
-    check((a => fold(0, _ + it)) == 6)
+    check((a => fold(0, result + it)) == 6)
 
   test "map with filter":
     check((a => map(it + 2) => filter(it mod 4 == 0)) == @[4])
@@ -51,7 +51,7 @@ suite "valid chains":
     check(not (a => map(it + 2) => all(it mod 4 == 0)))
 
   test "map with fold":
-    check((a => map(g(it)) => fold(0, _ + it)) == 10)
+    check((a => map(g(it)) => fold(0, result + it)) == 10)
 
   test "filter with exists":
     check(not (a => filter(it > 2) => exists(it == 4)))
@@ -60,7 +60,7 @@ suite "valid chains":
     check((a => filter(it mod 2 == 0).index(it < 0)) == 2)
 
   test "multiple methods":
-    var n = zip(a, b) =>
+    let n = zip(a, b) =>
       map(f(it[0], it[1])).
       filter(it mod 4 > 1).
       map(it * 2).
