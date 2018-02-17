@@ -167,6 +167,26 @@ Check if the given condition is true for all elements of the list.
 sequence --> otherOperations(..).all(cond): bool
 ```
 
+### index
+
+Get the first index of the item in the list, where the given condition is true.
+
+`index` can be used only at the end of the command chain.
+
+```nim
+sequence --> otherOperations(..).index(cond): int
+```
+
+### foreach
+
+Can only be used with functions that have side effects.
+As last command in the chain, the result is void. 
+As in-between element, the code is simply executed on each element. 
+
+```nim
+@[1,2,3] --> 
+    foreach(echo($it))
+```
 
 ### indexedMap
 

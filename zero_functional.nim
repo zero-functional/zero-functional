@@ -126,6 +126,29 @@ proc inlineAll(test: NimNode, index: int): NimNode =
     if not `adaptedTest`:
       return false
 
+proc inlineIndex(test: NimNode, index: int): NimNode =
+  var adaptedTest = test
+  adaptedTest = adapt(adaptedTest, index - 1, -1)
+  var idxIdent = newIdentNode("z")
+  var resultIdent =  newIdentNode("result")
+  result = quote:
+    `resultIdent` = -1 # index not found
+    if `adaptedTest`:
+      return `idxIdent` # return index
+
+proc inlineForeach(exprImpl: NimNode, index: int, last: bool): NimNode  =
+  var adaptedExpression = exprImpl
+  adaptedExpression = adapt(adaptedExpression, index - 1, -1)
+  if last:
+    result = quote:
+      `adaptedExpression`
+  else:
+    let itIdent = itNode(index)
+    let itPreviousIdent = itNode(index - 1)
+    result = quote:
+      let `itIdent` = `itPreviousIdent`
+      `adaptedExpression`
+  
 proc inlineFold(initial: NimNode, handler: NimNode, index: int, last: bool, initials: var NimNode): NimNode =
   var adaptedHandler = handler
   adaptedHandler = adapt(adaptedHandler, index - 1, index)
@@ -179,6 +202,11 @@ proc inlineElement(node: NimNode, index: int, last: bool, needsEmpty: bool, init
     of "all":
       ensureLast("all", last, node)
       return inlineAll(node[1], index)
+    of "index":
+      ensureLast("index", last, node)
+      return inlineIndex(node[1], index)
+    of "foreach":
+      return inlineForeach(node[1], index, last)
     of "indexedMap":
       return inlineMap(node[1], index, last, true)
     of "fold":
