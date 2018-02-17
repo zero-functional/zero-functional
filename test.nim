@@ -26,8 +26,8 @@ suite "valid chains":
   test "filter":
     check((a --> filter(it > 2)) == @[8])
 
-  test "any":
-    check((a --> any(it > 0)))
+  test "exists":
+    check((a --> exists(it > 0)))
 
   test "all":
     check(not (a --> all(it > 0)))
@@ -41,8 +41,8 @@ suite "valid chains":
   test "map with filter":
     check((a --> map(it + 2) --> filter(it mod 4 == 0)) == @[4])
 
-  test "map with any":
-    check((a --> map(it + 2) --> any(it mod 4 == 0)))
+  test "map with exists":
+    check((a --> map(it + 2) --> exists(it mod 4 == 0)))
 
   test "map with all":
     check(not (a --> map(it + 2) --> all(it mod 4 == 0)))
@@ -50,8 +50,8 @@ suite "valid chains":
   test "map with fold":
     check((a --> map(g(it)) --> fold(0, a + it)) == 10)
 
-  test "filter with any":
-    check(not (a --> filter(it > 2) --> any(it == 4)))
+  test "filter with exists":
+    check(not (a --> filter(it > 2) --> exists(it == 4)))
 
   test "multiple methods":
     var n = zip(a, b) -->
