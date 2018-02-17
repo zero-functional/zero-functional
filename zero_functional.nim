@@ -198,13 +198,13 @@ proc inlineSeq(ext: ExtNimNode): (NimNode, NimNode, int) {.compileTime.} =
   else:
     result = (q, q[0][^1], ext.index+1)
 
-proc ensureLast(label: string, last: bool, node: NimNode) {.compileTime.} =
-  if not last:
-    error("$1 can be only last in a chain" % label, node)
+proc ensureLast(ext: ExtNimNode, label: string) {.compileTime.} =
+  if not ext.isLastItem:
+    error("$1 can be only last in a chain" % label, ext.node)
 
-proc ensureNotLast(label: string, last: bool, node: NimNode) {.compileTime.} =
-  if last:
-    error("$1 can be only last in a chain" % label, node)
+proc ensureFirst(ext: ExtNimNode, label: string) {.compileTime.} =
+  if ext.index > 0:
+    error("$1 can be only last in a chain" % label, ext.node)
         
 proc inlineElement(node: NimNode, index: int, last: bool, needsEmpty: bool, initials: NimNode): (NimNode, NimNode, int) {.compileTime.} =
   let ext = node.newExtNode(index, last, needsEmpty)
@@ -212,25 +212,25 @@ proc inlineElement(node: NimNode, index: int, last: bool, needsEmpty: bool, init
     let label = $node[0]
     case label:
     of "zip":
-        ensureNotLast(label, last, node)
+        ext.ensureFirst(label)
         return ext.inlineZip()
     of "map":
       return ext.inlineMap()
     of "filter":
       return ext.inlineFilter()
     of "exists":
-      ensureLast(label, last, node)
+      ext.ensureLast(label)
       return ext.inlineExists()
     of "all":
-      ensureLast(label, last, node)
+      ext.ensureLast(label)
       return ext.inlineAll()
     of "index":
-      ensureLast(label, last, node)
+      ext.ensureLast(label)
       return ext.inlineIndex()
     of "indexedMap":
       return ext.inlineMap(indexed=true)
     of "fold":
-      ensureLast(label, last, node)
+      ext.ensureLast(label)
       return ext.inlineFold(initials)
     of "foreach":
       return ext.inlineForeach()
