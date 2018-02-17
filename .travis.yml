@@ -1,3 +1,14 @@
+# blocklist
+branches:
+  except:
+  - devel-oo
+  - master
+
+# safelist
+branches:
+  only:
+  - devel
+
 language: c
 compiler:
   - gcc
