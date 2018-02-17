@@ -184,7 +184,7 @@ var n = zip(a, b, c) =>
             all(it > 4)
 ```
 
-## fold
+### fold
 
 Currently a left fold (as easier to combine with the implementation)
 
@@ -194,7 +194,7 @@ the sequtils `a` is `_`, `result` is `it`
 var n = zip(a, b) => map(it[0] + it[1]).fold(0, result + it)
 ```
 
-## foreach
+### foreach
 
 Can only be used with functions that have side effects.
 When last command in the chain the result is void. 
