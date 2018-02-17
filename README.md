@@ -85,8 +85,8 @@ it's still very experimental, but it shows such an purely metaprogramming approa
 
 The supported variable names (can be changed at the beginning of the zero_functional.nim file) are:
 
-* it - for the iterator variable
-* _ - for the accumulator used in fold
+* `it` is used for the iterator variable
+* `result` is simply used for the accumulator used in fold
 
 
 ## Supported methods
@@ -184,17 +184,17 @@ var n = zip(a, b, c) =>
             all(it > 4)
 ```
 
-## fold
+### fold
 
 Currently a left fold (as easier to combine with the implementation)
 
-the sequtils `a` is `_`, `b` is `it`
+the sequtils `a` is `_`, `result` is `it`
 
 ```nim
-var n = zip(a, b) => map(it[0] + it[1]).fold(0, _ + it)
+var n = zip(a, b) => map(it[0] + it[1]).fold(0, result + it)
 ```
 
-## foreach
+### foreach
 
 Can only be used with functions that have side effects.
 When last command in the chain the result is void. 
