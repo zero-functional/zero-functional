@@ -2,7 +2,7 @@
 
 This is a fork of the original zero-functional from alehander42
 
-[![Build Status](https://travis-ci.org/michael72/zero-functional.svg?branch=master)](https://travis-ci.org/michael72/zero-functional)
+[![Build Status](https://travis-ci.org/michael72/zero-functional.svg?branch=devel)](https://travis-ci.org/michael72/zero-functional)
 
 A library providing (almost) zero-cost chaining for functional abstractions in Nim.
 
