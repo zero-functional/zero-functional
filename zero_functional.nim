@@ -10,13 +10,16 @@ type
     node: NimNode
     index: int
     isLastItem: bool
+    initials: NimNode
 
 proc newExtNode(node: NimNode, 
                    index: int, 
-                   isLastItem = false): ExtNimNode =
+                   isLastItem = false,
+                   initials: NimNode = nil): ExtNimNode =
   result = ExtNimNode(node: node, 
                       index: index, 
-                      isLastItem: isLastItem)
+                      isLastItem: isLastItem,
+                      initials: initials)
 
 proc clone(x: ExtNimNode): ExtNimNode {.compileTime.} =
     result = x.node.newExtNode(index = x.index, isLastItem = x.isLastItem)
@@ -130,11 +133,14 @@ proc inlineFilter(ext: ExtNimNode): (NimNode, int) {.compileTime.} =
           nil
   result = (q, ext.index)
 
+
 proc inlineExists(ext: ExtNimNode): (NimNode, int) {.compileTime.} =
   let adaptedTest = ext.adapt()
   let resultIdent = ext.res
-  let q = quote:
+  let i = quote:
     `resultIdent` = false
+  ext.initials.add(i)
+  let q = quote:
     if `adaptedTest`:
       return true
   result = (q, ext.index)
@@ -142,8 +148,10 @@ proc inlineExists(ext: ExtNimNode): (NimNode, int) {.compileTime.} =
 proc inlineAll(ext: ExtNimNode): (NimNode, int) {.compileTime.} =
   let adaptedTest = ext.adapt()
   let resultIdent = ext.res()
-  let q = quote:
+  let i = quote:
     `resultIdent` = true
+  ext.initials.add(i)
+  let q = quote:
     if not `adaptedTest`:
       return false
   result = (q, ext.index)
@@ -158,19 +166,21 @@ proc inlineIndex(ext: ExtNimNode): (NimNode, int){.compileTime.} =
   let adaptedTest = ext.adapt()
   var idxIdent = newIdentNode(indexVariableName)
   var resultIdent = ext.res
-  let q = quote:
+  let i = quote:
     `resultIdent` = -1 # index not found
+  ext.initials.add(i)
+  let q = quote:
     if `adaptedTest`:
       return `idxIdent` # return index
   result = (q, ext.index)  
 
-proc inlineFold(ext: ExtNimNode, initials: NimNode): (NimNode, int){.compileTime.} =
+proc inlineFold(ext: ExtNimNode): (NimNode, int){.compileTime.} =
   let initialValue = ext.node[1]
   let resultIdent = ext.res()
   let foldOperation = ext.adapt(index=2)
   let i = quote:
     `resultIdent` = `initialValue`
-  initials.add(i)
+  ext.initials.add(i)
   let q = quote:
     `resultIdent` = `foldOperation`
   result = (q, ext.index)
@@ -199,7 +209,7 @@ proc ensureFirst(ext: ExtNimNode, label: string) {.compileTime.} =
     error("$1 can be only last in a chain" % label, ext.node)
         
 proc inlineElement(node: NimNode, index: int, last: bool, initials: NimNode): (NimNode, int) {.compileTime.} =
-  let ext = node.newExtNode(index, last)
+  let ext = node.newExtNode(index, last, initials)
   if node.kind == nnkCall:
     let label = $node[0]
     case label:
@@ -223,7 +233,7 @@ proc inlineElement(node: NimNode, index: int, last: bool, initials: NimNode): (N
       return ext.inlineMap(indexed=true)
     of "fold":
       ext.ensureLast(label)
-      return ext.inlineFold(initials)
+      return ext.inlineFold()
     of "foreach":
       return ext.inlineForeach()
     else:
@@ -238,7 +248,7 @@ proc iterHandler(args: NimNode): NimNode {.compileTime.} =
   var code = result[^1]
   let initials = nnkStmtList.newTree()
   result[^1].add(initials)
-  
+
   if args.len > 0 and args[^1].len > 0:
     let lastCall = $args[^1][0]
     if (lastCall == "map") or (lastCall == "indexedMap") or (lastCall == "filter"):
