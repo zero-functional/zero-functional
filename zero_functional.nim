@@ -10,19 +10,16 @@ type
     node: NimNode
     index: int
     isLastItem: bool
-    needsEmpty: bool
 
 proc newExtNode(node: NimNode, 
                    index: int, 
-                   isLastItem = false, 
-                   needsEmpty = false): ExtNimNode =
+                   isLastItem = false): ExtNimNode =
   result = ExtNimNode(node: node, 
                       index: index, 
-                      isLastItem: isLastItem, 
-                      needsEmpty: needsEmpty)
+                      isLastItem: isLastItem)
 
 proc clone(x: ExtNimNode): ExtNimNode {.compileTime.} =
-    result = x.node.newExtNode(index = x.index, isLastItem = x.isLastItem, needsEmpty = x.needsEmpty)
+    result = x.node.newExtNode(index = x.index, isLastItem = x.isLastItem)
 
 proc iterFunction: NimNode {.compileTime.} =
   let empty = newEmptyNode()
@@ -191,8 +188,6 @@ proc inlineSeq(ext: ExtNimNode): (NimNode, int) {.compileTime.} =
   var q = quote:
     for `idxIdent`, `itIdent` in `node`:
       nil
-  if ext.needsEmpty:
-    q = inlineEmpty().add(q) # insert 'var empty = true' at the beginning of the statement list in q
   result = (q, ext.index+1)
   
 proc ensureLast(ext: ExtNimNode, label: string) {.compileTime.} =
@@ -203,8 +198,8 @@ proc ensureFirst(ext: ExtNimNode, label: string) {.compileTime.} =
   if ext.index > 0:
     error("$1 can be only last in a chain" % label, ext.node)
         
-proc inlineElement(node: NimNode, index: int, last: bool, needsEmpty: bool, initials: NimNode): (NimNode, int) {.compileTime.} =
-  let ext = node.newExtNode(index, last, needsEmpty)
+proc inlineElement(node: NimNode, index: int, last: bool, initials: NimNode): (NimNode, int) {.compileTime.} =
+  let ext = node.newExtNode(index, last)
   if node.kind == nnkCall:
     let label = $node[0]
     case label:
@@ -243,17 +238,16 @@ proc iterHandler(args: NimNode): NimNode {.compileTime.} =
   var code = result[^1]
   let initials = nnkStmtList.newTree()
   result[^1].add(initials)
-  var needsEmpty = false
+  
   if args.len > 0 and args[^1].len > 0:
     let lastCall = $args[^1][0]
-    needsEmpty = (lastCall == "map") or (lastCall == "indexedMap") or (lastCall == "filter")
-    if needsEmpty and args[0].kind == nnkCall:
-        code.add(inlineEmpty())
+    if (lastCall == "map") or (lastCall == "indexedMap") or (lastCall == "filter"):
+        code.add(inlineEmpty()) # need a `var empty = true;` at the beginning
   
   var index = 0
   for arg in args:
     let last = arg == args[^1]
-    let (res, newIndex) = inlineElement(arg, index, last, needsEmpty, initials)
+    let (res, newIndex) = inlineElement(arg, index, last, initials)
     let newCode = res.getStmtList()
     code.add(res)
     if newCode != nil:
