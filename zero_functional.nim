@@ -116,22 +116,22 @@ proc inlineFilter(ext: ExtNimNode): (NimNode, int) {.compileTime.} =
   let itPreviousIdent = itNode(ext.index-1)
   let adaptedTest = ext.adapt()
   
+  var q: NimNode
   if ext.isLastItem:
     let emptyIdent = newIdentNode(emptyCheckName)
     let resultIdent = ext.res
-    let q = quote:
+    q = quote:
       if `adaptedTest`:
         if `emptyIdent`:
           `emptyIdent` = false
           `resultIdent` = @[`itPreviousIdent`]
         else:
           `resultIdent`.add(`itPreviousIdent`)
-    result = (q, ext.index)
   else:
-    let q = quote :
+    q = quote :
         if `adaptedTest`:
           nil
-    result = (q, ext.index)
+  result = (q, ext.index)
 
 proc inlineExists(ext: ExtNimNode): (NimNode, int) {.compileTime.} =
   let adaptedTest = ext.adapt()
@@ -192,11 +192,9 @@ proc inlineSeq(ext: ExtNimNode): (NimNode, int) {.compileTime.} =
     for `idxIdent`, `itIdent` in `node`:
       nil
   if ext.needsEmpty:
-    q = inlineEmpty().add(q) # insert 'var empty = true' to statement list in q
-    result = (q, ext.index+1)
-  else:
-    result = (q, ext.index+1)
-
+    q = inlineEmpty().add(q) # insert 'var empty = true' at the beginning of the statement list in q
+  result = (q, ext.index+1)
+  
 proc ensureLast(ext: ExtNimNode, label: string) {.compileTime.} =
   if not ext.isLastItem:
     error("$1 can be only last in a chain" % label, ext.node)
@@ -251,8 +249,8 @@ proc iterHandler(args: NimNode): NimNode {.compileTime.} =
     needsEmpty = (lastCall == "map") or (lastCall == "indexedMap") or (lastCall == "filter")
     if needsEmpty and args[0].kind == nnkCall:
         code.add(inlineEmpty())
+  
   var index = 0
-
   for arg in args:
     let last = arg == args[^1]
     let (res, newIndex) = inlineElement(arg, index, last, needsEmpty, initials)
@@ -261,6 +259,7 @@ proc iterHandler(args: NimNode): NimNode {.compileTime.} =
     if newCode != nil:
       code = newCode
     index = newIndex
+  
   result = nnkCall.newTree(result)
 
 macro inline_iter*(args: varargs[untyped]): untyped =
