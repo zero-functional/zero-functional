@@ -32,6 +32,9 @@ suite "valid chains":
   test "all":
     check(not (a --> all(it > 0)))
 
+  test "index":
+      check((a --> index(it > 4)) == 1)
+
   test "indexedMap":
     check((a --> indexedMap(it)) == @[(0, 2), (1, 8), (2, -4)])
 
@@ -52,6 +55,19 @@ suite "valid chains":
 
   test "filter with exists":
     check(not (a --> filter(it > 2) --> exists(it == 4)))
+
+  test "filter with index":
+    check((a --> filter(it mod 2 == 0).index(it < 0)) == 2)
+
+  test "foreach":
+    var sum = 0
+    a --> foreach(sum += it)
+    check(sum == 6)
+
+  test "foreach with index":
+    var sum_until_it_gt_2 = 0
+    check((a --> foreach(sum_until_it_gt_2 += it).index(it > 2)) == 1)
+    check(sum_until_it_gt_2 == 10) # loop breaks when condition in index is true
 
   test "multiple methods":
     var n = zip(a, b) -->
