@@ -102,19 +102,19 @@ Those are not exactly the functions from sequtils, they have the some naming and
 The macro works as
 
 ```nim
-sequence --> map(..).any(..)
+sequence --> map(..).exists(..)
 ```
 
 or 
 
 ```nim
-zip(a, b, c) --> map(..).any(..)
+zip(a, b, c) --> map(..).exists(..)
 ```
 
 You can also use 
 
 ```nim
-connect(sequence, map(..), any(..))
+inline_iter(sequence, map(..), exists(..))
 ```
 
 The methods work with auto it variable
@@ -122,38 +122,55 @@ The methods work with auto it variable
 ### map
 
 ```nim
-sequence --> map(..)
+sequence --> map(op)
+```
+Map each item in the list to a new value.
+Example:
+```nim
+let x = @[1,2,3] --> map(it * 2)
+check(x == @[2,4,6])
 ```
 
 ### filter
 
 ```nim
-sequence --> filter(..)
+sequence --> filter(cond)
+```
+Filter the list elements with the given condition.
+Example:
+```nim
+let x = [-1,2,-3] --> filter(it > 0)
+check(x == [2])
 ```
 
 ### zip
 
-zip is more special, it can be for now only in the begining, and it can work with n sequences
+`zip` can only be used at the beginning of the command chain and it can work with n sequences
 
-### any
+### exists
 
-any can be used only finally
+Check if the given condition is true for at least one element of the list.
+
+`exists` can be used only at the end of the command chain.
 
 ```nim
-sequence --> map(..).any(..)
+sequence --> otherOperations(..).exists(cond): bool
 ```
 
 ### all
 
-all can be used only finally
+Check if the given condition is true for all elements of the list.
+
+`all` can be used only at the end of the command chain.
 
 ```nim
-sequence --> map(..).all(..)
+sequence --> otherOperations(..).all(cond): bool
 ```
+
 
 ### indexedMap
 
-Generates a tuple (position, it)
+Generates a tuple (index, it) for each element in the list
 
 ```nim
 var n = zip(a, b, c) -->
@@ -163,15 +180,16 @@ var n = zip(a, b, c) -->
             all(it > 4)
 ```
 
-## fold
+### fold
 
-Currently a left fold (as easier to combine with my technique)
+Currently a left fold (as easier to combine with the implementation)
 
 the sequtils `a` is `a`, `b` is `it`
 
 ```nim
 var n = zip(a, b) --> map(it[0] + it[1]).fold(0, a + it)
 ```
+
 
 ### LICENSE
 
