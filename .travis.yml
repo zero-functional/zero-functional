@@ -8,6 +8,7 @@ branches:
 branches:
   only:
   - devel
+  - dev-to-master
 
 language: c
 compiler:
