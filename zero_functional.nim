@@ -19,16 +19,20 @@ type
 
 proc newExtNode(node: NimNode, 
                    index: int, 
-                   isLastItem = false,
-                   initials: NimNode = nil,
+                   isLastItem: bool,
+                   initials: NimNode,
                    nextIndexInc = 0): ExtNimNode =
   result = ExtNimNode(node: node, 
                       index: index, 
                       isLastItem: isLastItem,
-                      initials: initials)
+                      initials: initials,
+                      nextIndexInc: nextIndexInc)
 
 proc clone(x: ExtNimNode): ExtNimNode {.compileTime.} =
-    result = x.node.newExtNode(index = x.index, isLastItem = x.isLastItem, initials = x.initials, nextIndexInc = x.nextIndexInc)
+    result = x.node.newExtNode(index = x.index, 
+                               isLastItem = x.isLastItem, 
+                               initials = x.initials,  
+                               nextIndexInc = x.nextIndexInc)
 
 proc iterFunction: NimNode {.compileTime.} =
   let empty = newEmptyNode()
@@ -234,17 +238,16 @@ proc ensureLast(ext: ExtNimNode) {.compileTime.} =
 
 proc ensureFirst(ext: ExtNimNode) {.compileTime.} =
   if ext.index > 0:
-    error("$1 can be only last in a chain" % $ext.node[0], ext.node)
+    error("$1 supposed to be first" % $ext.node[0], ext.node)
 
 proc ensureParameters(ext: ExtNimNode, no: int) {.compileTime.} = 
     if ext.node.len <= no:
       error($ext.node[0] & " needs at least $1 parameter(s)" % $no, ext.node)
         
-proc inlineElement(node: NimNode, index: int, last: bool, initials: NimNode): ExtNimNode {.compileTime.} =
-  let ext = node.newExtNode(index, last, initials)
-  if node.kind == nnkCall:
+proc inlineElement(ext: ExtNimNode): ExtNimNode {.compileTime.} =
+  if ext.node.kind == nnkCall:
     ext.ensureParameters(1)
-    let label = $node[0]
+    let label = $ext.node[0]
     case label:
     of "zip":
         ext.ensureFirst()
@@ -270,11 +273,13 @@ proc inlineElement(node: NimNode, index: int, last: bool, initials: NimNode): Ex
       return ext.inlineFold()
     of "foreach":
       return ext.inlineForeach()
+    of "any":
+      warning("any is deprecated - use exists instead")
+      return ext.inlineExists()
     else:
-      error("$1 is unknown" % label, node)    
+      error("$1 is unknown" % label, ext.node)    
   else:
-    if index != 0:
-      error("seq supposed to be first", node)
+    ext.ensureFirst()
     return ext.inlineSeq()
 
 proc iterHandler(args: NimNode): NimNode {.compileTime.} =
@@ -291,7 +296,7 @@ proc iterHandler(args: NimNode): NimNode {.compileTime.} =
   var index = 0
   for arg in args:
     let last = arg == args[^1]
-    let ext = inlineElement(arg, index, last, initials)
+    let ext = arg.newExtNode(index, last, initials).inlineElement()
     let newCode = ext.node.getStmtList()
     code.add(ext.node)
     if newCode != nil:
@@ -334,3 +339,4 @@ macro `-->`*(a: untyped, b: untyped): untyped =
 
 macro `=>`*(a: untyped, b: untyped): untyped =
   result = delegateMacro(a,b)
+
