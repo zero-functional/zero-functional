@@ -1,13 +1,11 @@
 # zero-functional
 
-This is a fork of the original zero-functional from alehander42
-
-[![Build Status](https://travis-ci.org/michael72/zero-functional.svg?branch=devel)](https://travis-ci.org/michael72/zero-functional)
+[![Build Status](https://travis-ci.org/michael72/zero-functional.svg?branch=dev-to-master)](https://travis-ci.org/michael72/zero-functional)
 
 A library providing (almost) zero-cost chaining for functional abstractions in Nim.
 
 ```nim
-var n = zip(a, b) =>
+var n = zip(a, b) -->
             map(f(it[0], it[1])).
             filter(it mod 4 > 1).
             map(it * 2).
@@ -88,7 +86,7 @@ it's still very experimental, but it shows such an purely metaprogramming approa
 The supported variable names (can be changed at the beginning of the zero_functional.nim file) are:
 
 * `it` is used for the iterator variable
-* `result` is simply used for the accumulator used in fold
+* `a` is used as the accumulator in fold
 
 
 ## Supported methods
@@ -98,13 +96,13 @@ Those are not exactly the functions from sequtils, they have the some naming and
 The macro works as
 
 ```nim
-sequence => map(..).exists(..)
+sequence --> map(..).exists(..)
 ```
 
 or 
 
 ```nim
-zip(a, b, c) => map(..).exists(..)
+zip(a, b, c) --> map(..).exists(..)
 ```
 
 You can also use 
@@ -118,24 +116,24 @@ The methods work with auto it variable
 ### map
 
 ```nim
-sequence => map(op)
+sequence --> map(op)
 ```
 Map each item in the list to a new value.
 Example:
 ```nim
-let x = @[1,2,3] => map(it * 2)
+let x = @[1,2,3] --> map(it * 2)
 check(x == @[2,4,6])
 ```
 
 ### filter
 
 ```nim
-sequence => filter(cond)
+sequence --> filter(cond)
 ```
 Filter the list elements with the given condition.
 Example:
 ```nim
-let x = [-1,2,-3] => filter(it > 0)
+let x = [-1,2,-3] --> filter(it > 0)
 check(x == [2])
 ```
 
@@ -150,7 +148,7 @@ Check if the given condition is true for at least one element of the list.
 `exists` can be used only at the end of the command chain.
 
 ```nim
-sequence => otherOperations(..).exists(cond): bool
+sequence --> otherOperations(..).exists(cond): bool
 ```
 
 ### all
@@ -160,7 +158,7 @@ Check if the given condition is true for all elements of the list.
 `all` can be used only at the end of the command chain.
 
 ```nim
-sequence => otherOperations(..).all(cond): bool
+sequence --> otherOperations(..).all(cond): bool
 ```
 
 ### index
@@ -170,7 +168,7 @@ Get the first index of the item in the list, where the given condition is true.
 `index` can be used only at the end of the command chain.
 
 ```nim
-sequence => otherOperations(..).index(cond): int
+sequence --> otherOperations(..).index(cond): int
 ```
 
 
@@ -179,7 +177,7 @@ sequence => otherOperations(..).index(cond): int
 Generates a tuple (index, it) for each element in the list
 
 ```nim
-var n = zip(a, b, c) =>
+var n = zip(a, b, c) -->
             indexedMap(f(it[0], it[1])).
             filter(it[0] < 10 and it[1] mod 4 > 1).
             map(it[1] * 2).
@@ -190,10 +188,10 @@ var n = zip(a, b, c) =>
 
 Currently a left fold (as easier to combine with the implementation)
 
-the sequtils `a` is `_`, `result` is `it`
+the sequtils `a` is `_`, `a` is `it`
 
 ```nim
-var n = zip(a, b) => map(it[0] + it[1]).fold(0, result + it)
+var n = zip(a, b) --> map(it[0] + it[1]).fold(0, a + it)
 ```
 
 ### foreach
@@ -203,14 +201,11 @@ When last command in the chain the result is void.
 As in-between element, the code is simply executed on each element. 
 
 ```nim
-@[1,2,3] => 
+@[1,2,3] --> 
     foreach(echo($it))
 ```
 
 ### LICENSE
 
-MIT, Michael Schulte
-
-original license:
 MIT, Alexander Ivanov
 

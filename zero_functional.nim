@@ -1,7 +1,7 @@
 import strutils, sequtils, macros
 
 const iteratorVariableName = "it"
-const accuVariableName = "result"
+const accuVariableName = "a"
 
 const internalIteratorName = "__" & iteratorVariableName & "__"
 const useInternalAccu = accuVariableName != "result"
@@ -300,7 +300,7 @@ proc iterHandler(args: NimNode): NimNode {.compileTime.} =
 
   result = nnkCall.newTree(result)
 
-macro inline_iter*(args: varargs[untyped]): untyped =
+macro connect*(args: varargs[untyped]): untyped =
   result = iterHandler(args)
 
 proc delegateMacro(a: NimNode, b:NimNode): NimNode =
@@ -330,7 +330,4 @@ proc delegateMacro(a: NimNode, b:NimNode): NimNode =
 
 
 macro `-->`*(a: untyped, b: untyped): untyped =
-  result = delegateMacro(a,b)
-
-macro `=>`*(a: untyped, b: untyped): untyped =
   result = delegateMacro(a,b)
