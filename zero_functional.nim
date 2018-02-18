@@ -270,6 +270,9 @@ proc inlineElement(node: NimNode, index: int, last: bool, initials: NimNode): Ex
       return ext.inlineFold()
     of "foreach":
       return ext.inlineForeach()
+    of "any":
+      warning("any is deprecated - use exists instead")
+      return ext.inlineExists()
     else:
       error("$1 is unknown" % label, node)    
   else:
