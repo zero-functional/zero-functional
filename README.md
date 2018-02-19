@@ -89,6 +89,22 @@ The supported variable names (can be changed at the beginning of the zero_functi
 * `a` is used as the accumulator in fold
 
 
+## Seq and arrays
+
+All supported methods work on finite indexable types and arrays.
+For `array[A, T]` we return `array[A, T]` and we try to not do any additional allocations.
+For other types we return seq
+
+We can describe the supported types as
+
+```nim
+type
+  FiniteIndexable[T] = concept a
+    a.low is int
+    a.high is int
+    a[int] is T
+```
+
 ## Supported methods
 
 Those are not exactly the functions from sequtils, they have the some naming and almost the same behavior
