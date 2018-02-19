@@ -73,6 +73,11 @@ suite "valid chains":
     check((a --> foreach(sum_until_it_gt_2 += it).index(it > 2)) == 1)
     check(sum_until_it_gt_2 == 10) # loop breaks when condition in index is true
 
+  test "foreach change in-place":
+    var my_list = @[2,3,4]
+    my_list --> foreach(it = idx * it)
+    check(my_list == @[0,3,8])
+
   test "multiple methods":
     let n = zip(a, b) -->
       map(f(it[0], it[1])).
@@ -88,13 +93,13 @@ suite "valid chains":
     check((aArray --> filter(it > 0)) == [2, 8, 0])
 
   test "array basic zip":
-    check((zip(aArray, bArray, cArray) --> filter(it[0] > 0 and it[2] == "one")) == [(8, 1, "one"), (0, 0, nil), (0, 0, nil)])
+    check((zip(aArray, bArray, cArray) --> filter(it[0] > 0 and it[2] == "one")) == [(0, 0, nil), (8, 1, "one"), (0, 0, nil)])
 
   test "array map":
     check((aArray --> map(it - 1)) == [1, 7, -5])
 
   test "array filter":
-    check((aArray --> filter(it > 2)) == [8, 0, 0])
+    check((aArray --> filter(it > 2)) == [0, 8, 0])
 
   test "array exists":
     check((aArray --> exists(it > 0)))
@@ -139,6 +144,11 @@ suite "valid chains":
     check((aArray --> foreach(sum_until_it_gt_2 += it).index(it > 2)) == 1)
     check(sum_until_it_gt_2 == 10) # loop breaks when condition in index is true
   
+  test "array with foreach change in-place":
+    var my_array = [2,3,4]
+    my_array --> foreach(it = idx * it)
+    check(my_array == [0,3,8])
+
   test "array":
     let n = zip(aArray, bArray) -->
       map(f(it[0], it[1])).
