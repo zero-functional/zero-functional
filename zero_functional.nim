@@ -405,7 +405,7 @@ proc iterHandler(args: NimNode): NimNode {.compileTime.} =
       index += 1
   if finals.len > 0:
     result[^1].add(finals)
-  echo(repr(result))
+  
   result = nnkCall.newTree(result)
 
 macro connect*(args: varargs[untyped]): untyped =
