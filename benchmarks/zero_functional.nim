@@ -1,13 +1,9 @@
 import strutils, sequtils, macros
 
-const iteratorVariableName = "it"
-const accuVariableName = "a"
-
-const internalIteratorName = "__" & iteratorVariableName & "__"
-const useInternalAccu = accuVariableName != "result"
-const internalAccuName = if (useInternalAccu): "__" & accuVariableName & "__" else: "result"
 const indexVariableName = "__index__"
 const emptyCheckName = "__empty__"
+const iteratorVariableName = "it"
+const internalIteratorName = "__" & iteratorVariableName & "__"
 
 type 
   ExtNimNode = ref object
@@ -15,24 +11,18 @@ type
     index: int
     isLastItem: bool
     initials: NimNode
-    nextIndexInc: int
 
 proc newExtNode(node: NimNode, 
                    index: int, 
-                   isLastItem: bool,
-                   initials: NimNode,
-                   nextIndexInc = 0): ExtNimNode =
+                   isLastItem = false,
+                   initials: NimNode = nil): ExtNimNode =
   result = ExtNimNode(node: node, 
                       index: index, 
                       isLastItem: isLastItem,
-                      initials: initials,
-                      nextIndexInc: nextIndexInc)
+                      initials: initials)
 
 proc clone(x: ExtNimNode): ExtNimNode {.compileTime.} =
-    result = x.node.newExtNode(index = x.index, 
-                               isLastItem = x.isLastItem, 
-                               initials = x.initials,  
-                               nextIndexInc = x.nextIndexInc)
+    result = x.node.newExtNode(index = x.index, isLastItem = x.isLastItem)
 
 proc iterFunction: NimNode {.compileTime.} =
   let empty = newEmptyNode()
@@ -45,26 +35,18 @@ proc iterFunction: NimNode {.compileTime.} =
     empty,
     nnkStmtList.newTree())
 
-proc mkItNode(index: int) : NimNode {.compileTime.} = 
+proc itNode(index: int) : NimNode {.compileTime.} = 
   newIdentNode(internalIteratorName & ("$1" % $index))
 
-proc itNode(ext: ExtNimNode) : NimNode {.compileTime.} =
-  result = mkItNode(ext.index)
-
-proc prevItNode(ext: ExtNimNode) : NimNode {.compileTime.} =
-  result = mkItNode(ext.index-1)
-
-proc res(ext: ExtNimNode): NimNode {.compileTime.} =
-  result = newIdentNode("result")
+proc res(ext: ExtNimNode): NimNode {.compileTime.} = 
+  newIdentNode("result")
 
 proc adapt(ext: ExtNimNode, index=1): NimNode {.compileTime.} =
   let fun = ext.node[index]
   case fun.kind:
   of nnkIdent:
     if $fun == iteratorVariableName:
-      return ext.prevItNode()
-    elif useInternalAccu and $fun == accuVariableName:
-      return newIdentNode(internalAccuName)
+      return itNode(ext.index-1)
     else:
       return fun
   of nnkFloatLit..nnkFloat128Lit, nnkCharLit..nnkUInt64Lit, nnkStrLit..nnkTripleStrLit, nnkSym:
@@ -88,8 +70,8 @@ proc getStmtList(node: NimNode, removeNil = true): NimNode =
       return child
   return nil
     
-proc inlineZip(ext: ExtNimNode): ExtNimNode {.compileTime.} =
-  let itIdent = ext.itNode()
+proc inlineZip(ext: ExtNimNode): (NimNode, int) {.compileTime.} =
+  let itIdent = itNode(ext.index)
   let idxIdent = newIdentNode(indexVariableName)
   let m = nnkCall.newTree(newIdentNode("min"), nnkBracket.newTree())
   let p = nnkPar.newTree()
@@ -99,15 +81,14 @@ proc inlineZip(ext: ExtNimNode): ExtNimNode {.compileTime.} =
       m[^1].add(nnkCall.newTree(newIdentNode("high"), arg))
       p.add(nnkBracketExpr.newTree(arg, idxIdent))
     z += 1
-  ext.node = quote:
+  let q = quote:
     let minHigh = `m`
     for `idxIdent` in 0..minHigh:
       let `itIdent` = `p`
-  ext.nextIndexInc = 1
-  result = ext
-    
-proc inlineMap(ext: ExtNimNode, indexed = false): ExtNimNode {.compileTime.} =
-  let itIdent = ext.itNode()
+  result = (q, ext.index+1)
+
+proc inlineMap(ext: ExtNimNode, indexed = false): (NimNode, int) {.compileTime.} =
+  let itIdent = itNode(ext.index)
   let adaptedF = ext.adapt()
   var next: NimNode
   if indexed:
@@ -116,105 +97,93 @@ proc inlineMap(ext: ExtNimNode, indexed = false): ExtNimNode {.compileTime.} =
       (`idxIdent`, `adaptedF`)
   else:
     next = adaptedF
-
+  var q: NimNode
   if ext.isLastItem:
     let emptyIdent = newIdentNode(emptyCheckName)
     let resultIdent = ext.res
-    ext.node = quote:
+    q = quote:
       if `emptyIdent`:
         `emptyIdent` = false
         `resultIdent` = @[`next`]
       else:
         `resultIdent`.add(`next`)
   else:
-    ext.node = quote:
+    q = quote:
       let `itIdent` = `next`
-  ext.nextIndexInc = 1
-  result = ext
+  result = (q, ext.index+1)
 
-proc inlineFilter(ext: ExtNimNode): ExtNimNode {.compileTime.} =
+proc inlineFilter(ext: ExtNimNode): (NimNode, int) {.compileTime.} =
+  let itPreviousIdent = itNode(ext.index-1)
   let adaptedTest = ext.adapt()
   
+  var q: NimNode
   if ext.isLastItem:
     let emptyIdent = newIdentNode(emptyCheckName)
     let resultIdent = ext.res
-    let itPrevIdent = ext.prevItNode()
-    ext.node = quote:
+    q = quote:
       if `adaptedTest`:
         if `emptyIdent`:
           `emptyIdent` = false
-          `resultIdent` = @[`itPrevIdent`]
+          `resultIdent` = @[`itPreviousIdent`]
         else:
-          `resultIdent`.add(`itPrevIdent`)
+          `resultIdent`.add(`itPreviousIdent`)
   else:
-    ext.node = quote :
+    q = quote :
         if `adaptedTest`:
           nil
-  result = ext
+  result = (q, ext.index)
 
 
-proc inlineExists(ext: ExtNimNode): ExtNimNode {.compileTime.} =
+proc inlineExists(ext: ExtNimNode): (NimNode, int) {.compileTime.} =
   let adaptedTest = ext.adapt()
   let resultIdent = ext.res
   let i = quote:
     `resultIdent` = false
   ext.initials.add(i)
-  ext.node = quote:
+  let q = quote:
     if `adaptedTest`:
       return true
-  result = ext
+  result = (q, ext.index)
 
-proc inlineAll(ext: ExtNimNode): ExtNimNode {.compileTime.} =
+proc inlineAll(ext: ExtNimNode): (NimNode, int) {.compileTime.} =
   let adaptedTest = ext.adapt()
-  let resultIdent = ext.res
+  let resultIdent = ext.res()
   let i = quote:
     `resultIdent` = true
   ext.initials.add(i)
-  ext.node = quote:
+  let q = quote:
     if not `adaptedTest`:
       return false
-  result = ext
+  result = (q, ext.index)
 
-proc inlineForeach(ext: ExtNimNode): ExtNimNode {.compileTime.} =
+proc inlineForeach(ext: ExtNimNode): (NimNode, int) {.compileTime.} =
   let adaptedExpression = ext.adapt()
-  ext.node = quote:
+  let q = quote:
     `adaptedExpression`
-  result = ext
+  result = (q, ext.index)
       
-proc inlineIndex(ext: ExtNimNode): ExtNimNode{.compileTime.} =
+proc inlineIndex(ext: ExtNimNode): (NimNode, int){.compileTime.} =
   let adaptedTest = ext.adapt()
   var idxIdent = newIdentNode(indexVariableName)
   var resultIdent = ext.res
   let i = quote:
     `resultIdent` = -1 # index not found
   ext.initials.add(i)
-  ext.node = quote:
+  let q = quote:
     if `adaptedTest`:
       return `idxIdent` # return index
-  result = ext  
+  result = (q, ext.index)  
 
-proc inlineFold(ext: ExtNimNode): ExtNimNode{.compileTime.} =
+proc inlineFold(ext: ExtNimNode): (NimNode, int){.compileTime.} =
   let initialValue = ext.node[1]
-  let resultIdent = ext.res
+  let resultIdent = ext.res()
   let foldOperation = ext.adapt(index=2)
-
-  var i : NimNode 
-  if useInternalAccu:
-    let accuIdent = newIdentNode(internalAccuName) 
-    i = quote:
-      var `accuIdent` = `initialValue`
-    ext.node = quote:
-      `accuIdent` = `foldOperation`
-      `resultIdent` = `accuIdent`
-  else:
-    i = quote:
-      `resultIdent` = `initialValue`
-    ext.node = quote:
-      `resultIdent` = `foldOperation`
-  
+  let i = quote:
+    `resultIdent` = `initialValue`
   ext.initials.add(i)
-
-  result = ext
+  let q = quote:
+    `resultIdent` = `foldOperation`
+  result = (q, ext.index)
 
 proc inlineEmpty(): NimNode {.compileTime.} =
   let emptyIdent = newIdentNode(emptyCheckName)
@@ -222,64 +191,56 @@ proc inlineEmpty(): NimNode {.compileTime.} =
     var `emptyIdent` = true
   result = nnkStmtList.newTree().add(q)
 
-proc inlineSeq(ext: ExtNimNode): ExtNimNode {.compileTime.} =
-  let itIdent = ext.itNode()
+proc inlineSeq(ext: ExtNimNode): (NimNode, int) {.compileTime.} =
+  let itIdent = itNode(0)
   let node = ext.node
   let idxIdent = newIdentNode(indexVariableName)
-  ext.node = quote:
+  var q = quote:
     for `idxIdent`, `itIdent` in `node`:
       nil
-  ext.nextIndexInc = 1
-  result = ext
+  result = (q, ext.index+1)
   
-proc ensureLast(ext: ExtNimNode) {.compileTime.} =
+proc ensureLast(ext: ExtNimNode, label: string) {.compileTime.} =
   if not ext.isLastItem:
-    error("$1 can be only last in a chain" % $ext.node[0], ext.node)
+    error("$1 can be only last in a chain" % label, ext.node)
 
-proc ensureFirst(ext: ExtNimNode) {.compileTime.} =
+proc ensureFirst(ext: ExtNimNode, label: string) {.compileTime.} =
   if ext.index > 0:
-    error("$1 supposed to be first" % $ext.node[0], ext.node)
-
-proc ensureParameters(ext: ExtNimNode, no: int) {.compileTime.} = 
-    if ext.node.len <= no:
-      error($ext.node[0] & " needs at least $1 parameter(s)" % $no, ext.node)
+    error("$1 can be only last in a chain" % label, ext.node)
         
-proc inlineElement(ext: ExtNimNode): ExtNimNode {.compileTime.} =
-  if ext.node.kind == nnkCall:
-    ext.ensureParameters(1)
-    let label = $ext.node[0]
+proc inlineElement(node: NimNode, index: int, last: bool, initials: NimNode): (NimNode, int) {.compileTime.} =
+  let ext = node.newExtNode(index, last, initials)
+  if node.kind == nnkCall:
+    let label = $node[0]
     case label:
     of "zip":
-        ext.ensureFirst()
+        ext.ensureFirst(label)
         return ext.inlineZip()
     of "map":
       return ext.inlineMap()
     of "filter":
       return ext.inlineFilter()
     of "exists":
-      ext.ensureLast()
+      ext.ensureLast(label)
       return ext.inlineExists()
     of "all":
-      ext.ensureLast()
+      ext.ensureLast(label)
       return ext.inlineAll()
     of "index":
-      ext.ensureLast()
+      ext.ensureLast(label)
       return ext.inlineIndex()
     of "indexedMap":
       return ext.inlineMap(indexed=true)
     of "fold":
-      ext.ensureLast()
-      ext.ensureParameters(2)
+      ext.ensureLast(label)
       return ext.inlineFold()
     of "foreach":
       return ext.inlineForeach()
-    of "any":
-      warning("any is deprecated - use exists instead")
-      return ext.inlineExists()
     else:
-      error("$1 is unknown" % label, ext.node)    
+      error("$1 is unknown" % label, node)    
   else:
-    ext.ensureFirst()
+    if index != 0:
+      error("seq supposed to be first", node)
     return ext.inlineSeq()
 
 proc iterHandler(args: NimNode): NimNode {.compileTime.} =
@@ -296,16 +257,16 @@ proc iterHandler(args: NimNode): NimNode {.compileTime.} =
   var index = 0
   for arg in args:
     let last = arg == args[^1]
-    let ext = arg.newExtNode(index, last, initials).inlineElement()
-    let newCode = ext.node.getStmtList()
-    code.add(ext.node)
+    let (res, newIndex) = inlineElement(arg, index, last, initials)
+    let newCode = res.getStmtList()
+    code.add(res)
     if newCode != nil:
       code = newCode
-    index += ext.nextIndexInc
-
+    index = newIndex
+  
   result = nnkCall.newTree(result)
 
-macro connect*(args: varargs[untyped]): untyped =
+macro inline_iter*(args: varargs[untyped]): untyped =
   result = iterHandler(args)
 
 proc delegateMacro(a: NimNode, b:NimNode): NimNode =
@@ -335,4 +296,7 @@ proc delegateMacro(a: NimNode, b:NimNode): NimNode =
 
 
 macro `-->`*(a: untyped, b: untyped): untyped =
+  result = delegateMacro(a,b)
+
+macro `=>`*(a: untyped, b: untyped): untyped =
   result = delegateMacro(a,b)
