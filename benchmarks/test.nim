@@ -25,7 +25,7 @@ proc example1: bool =
   var o = a -->
             map(f(it, it)).
             map(it - 7).
-            fold(0, it + result)
+            fold(0, it + a)
   result = o > 0 # otherwise optimized
 
 
