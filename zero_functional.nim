@@ -14,6 +14,7 @@ type
     index: int        ## index used for the created iterator - 0 for the first 
     isLastItem: bool  ## true if the current item is the last item in the command chain
     initials: NimNode ## code section before the first iterator where variables can be defined
+    finals: NimNode   ## code to set the final operations, e.g. the result
     listRef:  NimNode ## reference to the list the iterator is working on
     nextIndexInc: bool ## if set to true the index will be increment by 1 for the next iterator 
   
@@ -108,12 +109,14 @@ proc newExtNode(node: NimNode,
                    index: int, 
                    isLastItem: bool,
                    initials: NimNode,
+                   finals: NimNode,
                    listRef: NimNode,
                    nextIndexInc = false): ExtNimNode =
   result = ExtNimNode(node: node, 
                       index: index, 
                       isLastItem: isLastItem,
                       initials: initials,
+                      finals: finals,
                       listRef: listRef,
                       nextIndexInc: nextIndexInc)
 
@@ -121,6 +124,7 @@ proc clone(x: ExtNimNode): ExtNimNode {.compileTime.} =
     result = x.node.newExtNode(index = x.index, 
                                isLastItem = x.isLastItem, 
                                initials = x.initials,
+                               finals = x.finals,
                                listRef = x.listRef,
                                nextIndexInc = x.nextIndexInc)
 
@@ -301,7 +305,9 @@ proc inlineFold(ext: ExtNimNode): ExtNimNode{.compileTime.} =
       var `accuIdent` = `initialValue`
     ext.node = quote:
       `accuIdent` = `foldOperation`
+    let f = quote:
       `resultIdent` = `accuIdent`
+    ext.finals.add(f)
   else:
     i = quote:
       `resultIdent` = `initialValue`
@@ -387,15 +393,19 @@ proc iterHandler(args: NimNode): NimNode {.compileTime.} =
       result[^1].add(zero)
   var index = 0
   let listRef = args[0]
+  let finals = nnkStmtList.newTree()
   for arg in args:
     let last = arg == args[^1]
-    let ext = arg.newExtNode(index, last, initials, listRef).inlineElement()
+    let ext = arg.newExtNode(index, last, initials, finals, listRef).inlineElement()
     let newCode = ext.node.getStmtList()
     code.add(ext.node)
     if newCode != nil:
       code = newCode
     if ext.nextIndexInc:
       index += 1
+  if finals.len > 0:
+    result[^1].add(finals)
+  echo(repr(result))
   result = nnkCall.newTree(result)
 
 macro connect*(args: varargs[untyped]): untyped =
