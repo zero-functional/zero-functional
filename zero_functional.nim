@@ -1,214 +1,409 @@
 import strutils, sequtils, macros
 
-proc connectFunction: NimNode {.compileTime.} =
-  var empty = newEmptyNode()
+const iteratorVariableName = "it"
+const accuVariableName = "a"
+const indexVariableName = "idx"
+
+const internalIteratorName = "__" & iteratorVariableName & "__"
+const useInternalAccu = accuVariableName != "result"
+const internalAccuName = if (useInternalAccu): "__" & accuVariableName & "__" else: "result"
+
+type 
+  ExtNimNode = ref object ## Store additional info the current NimNode used in the inline... functions
+    node: NimNode     ## the current working node / the current function
+    index: int        ## index used for the created iterator - 0 for the first 
+    isLastItem: bool  ## true if the current item is the last item in the command chain
+    initials: NimNode ## code section before the first iterator where variables can be defined
+    listRef:  NimNode ## reference to the list the iterator is working on
+    nextIndexInc: bool ## if set to true the index will be increment by 1 for the next iterator 
+  
+when false: #TODO not used at the moment 
+  type
+    FiniteIndexable[T] = concept a
+      a.low is int
+      a.high is int
+      a[int] is T
+
+proc zeroDsl*(node: NimNode): bool =
+  node.kind == nnkCall and node[0].kind == nnkIdent and $node[0] in @["zip", "map", "indexedMap", "filter", "exists", "any", "all", "index", "fold", "foreach"]
+
+proc toInternal(node: NimNode, base: NimNode): NimNode =
+  if not zeroDsl(node):
+    return if base.isNil: node else: nnkDotExpr.newTree(base, node)    
+  let call = node[0].repr
+  let callNode = ident("$1Internal" % call)
+  if not base.isNil:
+    result = nnkCall.newTree(nnkDotExpr.newTree(base, callNode))
+  else:
+    result = nnkCall.newTree(callNode)
+  if call in @["zip"]:
+    var isArg = false
+    for child in node:
+      if isArg:
+        result.add(child)
+      else:
+        isArg = true
+  elif call in @["map", "indexedMap", "filter"]:
+    let it = ident("it")
+    let logic = node[1]
+    let empty = newEmptyNode()
+    let autoIdent = ident("auto")
+    let handler = nnkLambda.newTree(
+      empty,
+      empty,
+      empty,
+      nnkFormalParams.newTree(autoIdent, nnkIdentDefs.newTree(it, autoIdent, empty)),
+      empty,
+      empty,
+      logic)
+    result.add(handler)
+
+proc compileTimeTypeInfer(node: NimNode): NimNode =
+  # zip(..), map(..) => zipInternal(..).mapInternal(..)
+  result = nil
+  for child in node:
+    result = toInternal(child, result)
+
+
+# internal functions: just have to return a valid non-nil sequence and typecheck
+proc zipInternal*[T, U](a: seq[T], b: seq[U]): seq[(T, U)] =
+  @[]
+
+proc zipInternal*[T, U, V](a: seq[T], b: seq[U], c: seq[V]): seq[(T, U, V)] =
+  @[]
+
+proc zipInternal*[T, U, V, W](a: seq[T], b: seq[U], c: seq[V], d: seq[W]): seq[(T, U, V, W)] =
+  @[]
+
+proc mapInternal*[T, U](s: seq[T], handler: proc(element: T): U): seq[U] =
+  @[]
+
+proc indexedMapInternal*[T, U](s: seq[T], handler: proc(element: (int, T)): U): seq[U] =
+  @[]
+
+proc filterInternal*[T](s: seq[T], handler: proc(element: T): bool): seq[T] =
+  @[]
+
+proc zipInternal*[A, T, U](a: array[A, T], b: array[A, U]): array[A, (T, U)] =
+  discard
+
+proc zipInternal*[A, T, U, V](a: array[A, T], b: array[A, U], c: array[A, V]): array[A, (T, U, V)] =
+  discard
+
+proc zipInternal*[A, T, U, V, W](a: array[A, T], b: array[A, U], c: array[A, V], d: array[A, W]): seq[(T, U, V, W)] =
+  discard
+
+proc mapInternal*[A, T, U](a: array[A, T], handler: proc(element: T): U): array[A, U] =
+  discard
+
+proc indexedMapInternal*[A, T, U](a: array[A, T], handler: proc(element: (int, T)): U): array[A, U] =
+  discard
+
+proc filterInternal*[A, T](a: array[A, T], handler: proc(element: T): bool): array[A, T] =
+  discard
+
+
+
+proc newExtNode(node: NimNode, 
+                   index: int, 
+                   isLastItem: bool,
+                   initials: NimNode,
+                   listRef: NimNode,
+                   nextIndexInc = false): ExtNimNode =
+  result = ExtNimNode(node: node, 
+                      index: index, 
+                      isLastItem: isLastItem,
+                      initials: initials,
+                      listRef: listRef,
+                      nextIndexInc: nextIndexInc)
+
+proc clone(x: ExtNimNode): ExtNimNode {.compileTime.} =
+    result = x.node.newExtNode(index = x.index, 
+                               isLastItem = x.isLastItem, 
+                               initials = x.initials,
+                               listRef = x.listRef,
+                               nextIndexInc = x.nextIndexInc)
+
+proc iterFunction: NimNode {.compileTime.} =
+  let empty = newEmptyNode()
   result = nnkLambda.newTree(
     empty,
     empty,
     empty,
-    nnkFormalParams.newTree(newIdentNode(!"auto")),
+    nnkFormalParams.newTree(newIdentNode("auto")),
     empty,
     empty,
     nnkStmtList.newTree())
 
-proc itNode(index: int): NimNode {.compileTime.} =
-  newIdentNode(!("it$1" % $index))
+proc mkItNode(index: int) : NimNode {.compileTime.} = 
+  newIdentNode(internalIteratorName & ("$1" % $index))
 
-proc aNode(index: int): NimNode {.compileTime.} =
-  newIdentNode(!("a$1" % $index))
+proc itNode(ext: ExtNimNode) : NimNode {.compileTime.} =
+  result = mkItNode(ext.index)
 
-proc adapt(node: var NimNode, index: int, aIndex: int): NimNode =
-  case node.kind:
+proc prevItNode(ext: ExtNimNode) : NimNode {.compileTime.} =
+  result = mkItNode(ext.index - 1)
+
+proc res(ext: ExtNimNode): NimNode {.compileTime.} =
+  result = newIdentNode("result")
+
+proc adapt(ext: ExtNimNode, index=1): NimNode {.compileTime.} =
+  let fun = ext.node[index]
+  case fun.kind:
   of nnkIdent:
-    if $node == "it":
-      return itNode(index)
-    elif aIndex != -1 and $node == "a":
-      return aNode(aIndex)
+    if $fun == iteratorVariableName:
+      return ext.prevItNode()
+    elif useInternalAccu and $fun == accuVariableName:
+      return newIdentNode(internalAccuName)
     else:
-      return node
+      return fun
   of nnkFloatLit..nnkFloat128Lit, nnkCharLit..nnkUInt64Lit, nnkStrLit..nnkTripleStrLit, nnkSym:
-    return node
+    return fun
   else:
-    for z in 0..<len(node):
-      var son = node[z]
-      node.add(adapt(son, index, aIndex))
-    node.del(0, len(node) div 2)
-    return node
+    for z in 0..<fun.len:
+      let son = ext.clone()
+      son.node = fun
+      fun.add(son.adapt(index=z))
+    fun.del(0, fun.len div 2)
+    return fun
 
-proc inlineZip(a: NimNode, index: int, last: bool): (NimNode, NimNode) =
-  var itIdent = itNode(index)
-  var zIdent = newIdentNode(!"z")
-  var emptyIdent = newIdentNode(!"empty")
-  var m = nnkCall.newTree(newIdentNode(!"min"), nnkBracket.newTree())
-  var p = nnkPar.newTree()
+proc getStmtList(node: NimNode, removeNil = true): NimNode =
+  var child = node
+  while child.len > 0:
+    child = child[^1]
+    if child.kind == nnkStmtList:
+      if removeNil:
+        if child.len > 0 and child[^1].kind == nnkNilLit:
+          child.del(1,1)
+      return child
+  return nil
+    
+proc inlineZip(ext: ExtNimNode): ExtNimNode {.compileTime.} =
+  let itIdent = ext.itNode()
+  let idxIdent = newIdentNode(indexVariableName)
+  let m = nnkCall.newTree(newIdentNode("min"), nnkBracket.newTree())
+  let p = nnkPar.newTree()
   var z = 0
-  for arg in a:
+  for arg in ext.node:
     if z > 0:
       m[^1].add(nnkCall.newTree(newIdentNode("high"), arg))
-      p.add(nnkBracketExpr.newTree(arg, zIdent))
+      p.add(nnkBracketExpr.newTree(arg, idxIdent))
     z += 1
-  var q = quote:
-    var minHigh = `m`
-    var `emptyIdent` = true
-    for `zIdent` in 0..minHigh:
-      var `itIdent` = `p`
-      # (`a`[`zIdent`], `b`[`zIdent`])
-  result = (q, q[2][^1])
+  ext.node = quote:
+    let minHigh = `m`
+    for `idxIdent` in 0..minHigh:
+      let `itIdent` = `p`
+  ext.nextIndexInc = true
+  result = ext
 
-proc inlineMap(f: NimNode, index: int, last: bool, indexed: bool): (NimNode, NimNode) =
-  var itIdent = itNode(index)
-  var emptyIdent = newIdentNode(!"empty")
-  var adaptedF = f
-  adaptedF = adapt(adaptedF, index - 1, -1)
+proc inlineMap(ext: ExtNimNode, indexed = false): ExtNimNode {.compileTime.} =
+  let itIdent = ext.itNode()
+  let adaptedF = ext.adapt()
+  let idxIdent = newIdentNode(indexVariableName)
   var next: NimNode
   if indexed:
-    var zIdent = newIdentNode(!"z")
     next = quote:
-      (`zIdent`, `adaptedF`)
+      (`idxIdent`, `adaptedF`)
   else:
     next = adaptedF
-  var q: NimNode
-  if last:
-    var resultIdent = newIdentNode(!"result")
-    q = quote:
-      if `emptyIdent`:
-        `emptyIdent` = false
-        `resultIdent` = @[`next`]
+
+  if ext.isLastItem:
+    let resultIdent = ext.res
+    ext.node = quote:
+      when `resultIdent` is array:
+        `resultIdent`[`idxIdent`] = `next`
       else:
         `resultIdent`.add(`next`)
   else:
-    q = quote:
-      var `itIdent` = `next`
-  result = (q, nil)
+    ext.node = quote:
+      let `itIdent` = `next`
+  ext.nextIndexInc = true
+  result = ext
 
-proc inlineFilter(test: NimNode, index: int, last: bool): (NimNode, NimNode) =
-  var itIdent = itNode(index)
-  var itPreviousIdent = itNode(index - 1)
-  var emptyIdent = newIdentNode(!"empty")
-  var adaptedTest = test
-  adaptedTest = adapt(adaptedTest, index - 1, -1)
-  var q: NimNode
-  if last:
-    var resultIdent = newIdentNode(!"result")
-    q = quote:
+proc inlineFilter(ext: ExtNimNode): ExtNimNode {.compileTime.} =
+  let adaptedTest = ext.adapt()
+  if ext.isLastItem:
+    let resultIdent = ext.res
+    let itPrevIdent = ext.prevItNode()
+    let idxIdent = ident(indexVariableName)
+    ext.node = quote:
       if `adaptedTest`:
-        if `emptyIdent`:
-          `emptyIdent` = false
-          `resultIdent` = @[`itPreviousIdent`]
+        when `resultIdent` is array:
+          `resultIdent`[`idxIdent`] = `itPrevIdent`
         else:
-          `resultIdent`.add(`itPreviousIdent`)
+          `resultIdent`.add(`itPrevIdent`)
   else:
-    q = quote:
-      if `adaptedTest`:
-        var `itIdent` = `itPreviousIdent`
-  echo(treeRepr(q))
-  result = (q, q[0][^1])
+    ext.node = quote :
+        if `adaptedTest`:
+          nil
+  result = ext
 
-proc inlineAny(test: NimNode, index: int): (NimNode, NimNode) =
-  var itIdent = itNode(index)
-  var adaptedTest = test
-  adaptedTest = adapt(adaptedTest, index - 1, -1)
-  var resultIdent = newIdentNode(!"result")
-  var q = quote:
+proc inlineExists(ext: ExtNimNode): ExtNimNode {.compileTime.} =
+  let adaptedTest = ext.adapt()
+  let resultIdent = ext.res
+  let i = quote:
     `resultIdent` = false
+  ext.initials.add(i)
+  ext.node = quote:
     if `adaptedTest`:
       return true
-  result = (q, nil)
+  result = ext
 
-proc inlineAll(test: NimNode, index: int): (NimNode, NimNode) =
-  var itIdent = itNode(index)
-  var adaptedTest = test
-  adaptedTest = adapt(adaptedTest, index - 1, -1)
-  var resultIdent = newIdentNode(!"result")
-  var q = quote:
+proc inlineAll(ext: ExtNimNode): ExtNimNode {.compileTime.} =
+  let adaptedTest = ext.adapt()
+  let resultIdent = ext.res
+  let i = quote:
     `resultIdent` = true
+  ext.initials.add(i)
+  ext.node = quote:
     if not `adaptedTest`:
       return false
-  result = (q, nil)
+  result = ext
 
-proc inlineFold(initial: NimNode, handler: NimNode, index: int, last: bool, initials: var NimNode): (NimNode, NimNode) =
-  var itIdent = itNode(index)
-  var adaptedHandler = handler
-  adaptedHandler = adapt(adaptedHandler, index - 1, index)
-  var aIdent = aNode(index)
-  var q: NimNode
-  if last:
-    var resultIdent = newIdentNode(!"result")
-    q = quote:
-      `aIdent` = `adaptedHandler`
-      `resultIdent` = `aIdent`
+proc inlineForeach(ext: ExtNimNode): ExtNimNode {.compileTime.} =
+  var adaptedExpression = ext.adapt()
+  if adaptedExpression.kind == nnkExprEqExpr and $adaptedExpression[0] == $ext.prevItNode():
+    let rightSide = adaptedExpression[^1]
+    let listRef = ext.listRef
+    let index = newIdentNode(indexVariableName) 
+    ext.node = quote:
+      `listRef`[`index`] = nil
+    for idx,child in ext.node:
+      if child.kind == nnkNilLit:
+        ext.node[idx] = rightSide
+        break
   else:
-    q = quote:
-      `aIdent` = `adaptedHandler`
-  var i = quote:
-    var `aIdent` = `initial`
-  initials.add(i)
-  result = (q, nil)
+    ext.node = quote:
+      `adaptedExpression`
+  result = ext
+      
+proc inlineIndex(ext: ExtNimNode): ExtNimNode{.compileTime.} =
+  let adaptedTest = ext.adapt()
+  var idxIdent = newIdentNode(indexVariableName)
+  var resultIdent = ext.res
+  let i = quote:
+    `resultIdent` = -1 # index not found
+  ext.initials.add(i)
+  ext.node = quote:
+    if `adaptedTest`:
+      return `idxIdent` # return index
+  result = ext  
 
-proc inlineSeq(node: NimNode, last: bool): (NimNode, NimNode) =
-  var itIdent = itNode(0)
-  var zIdent = newIdentNode(!"z")
-  var emptyIdent = newIdentNode(!"empty")
-  var q = quote:
-    var `emptyIdent` = true
-    for `zIdent`, `itIdent` in `node`:
+proc inlineFold(ext: ExtNimNode): ExtNimNode{.compileTime.} =
+  let initialValue = ext.node[1]
+  let resultIdent = ext.res
+  let foldOperation = ext.adapt(index=2)
+
+  var i : NimNode 
+  if useInternalAccu:
+    let accuIdent = newIdentNode(internalAccuName) 
+    i = quote:
+      var `accuIdent` = `initialValue`
+    ext.node = quote:
+      `accuIdent` = `foldOperation`
+      `resultIdent` = `accuIdent`
+  else:
+    i = quote:
+      `resultIdent` = `initialValue`
+    ext.node = quote:
+      `resultIdent` = `foldOperation`
+  
+  ext.initials.add(i)
+  result = ext
+
+proc inlineSeq(ext: ExtNimNode): ExtNimNode {.compileTime.} =
+  let itIdent = ext.itNode()
+  let node = ext.node
+  let idxIdent = newIdentNode(indexVariableName)
+  ext.node = quote:
+    for `idxIdent`, `itIdent` in `node`:
       nil
-  q[1][^1].del(0, 1)
-  result = (q, q[1][^1])
+  ext.nextIndexInc = true
+  result = ext
+  
+proc ensureLast(ext: ExtNimNode) {.compileTime.} =
+  if not ext.isLastItem:
+    error("$1 can be only last in a chain" % $ext.node[0], ext.node)
 
-proc ensureLast(label: string, last: bool, node: NimNode) =
-  if not last:
-    error("$1 can be only last in a chain" % label, node)
+proc ensureFirst(ext: ExtNimNode) {.compileTime.} =
+  if ext.index > 0:
+    error("$1 supposed to be first" % $ext.node[0], ext.node)
 
-proc inlineElement(node: NimNode, index: int, last: bool, initials: var NimNode): (NimNode, NimNode) =
-  if node.kind == nnkCall:
-    var label = $node[0]
+proc ensureParameters(ext: ExtNimNode, no: int) {.compileTime.} = 
+    if ext.node.len <= no:
+      error($ext.node[0] & " needs at least $1 parameter(s)" % $no, ext.node)
+        
+proc inlineElement(ext: ExtNimNode): ExtNimNode {.compileTime.} =
+  if ext.node.kind == nnkCall:
+    ext.ensureParameters(1)
+    let label = $ext.node[0]
     case label:
     of "zip":
-      return inlineZip(node, index, last)
+        ext.ensureFirst()
+        return ext.inlineZip()
     of "map":
-      return inlineMap(node[1], index, last, false)
+      return ext.inlineMap()
     of "filter":
-      return inlineFilter(node[1], index, last)
-    of "any":
-      ensureLast("any", last, node)
-      return inlineAny(node[1], index)
+      return ext.inlineFilter()
+    of "exists":
+      ext.ensureLast()
+      return ext.inlineExists()
     of "all":
-      ensureLast("all", last, node)
-      return inlineAll(node[1], index)
+      ext.ensureLast()
+      return ext.inlineAll()
+    of "index":
+      ext.ensureLast()
+      return ext.inlineIndex()
     of "indexedMap":
-      return inlineMap(node[1], index, last, true)
+      return ext.inlineMap(indexed=true)
     of "fold":
-      return inlineFold(node[1], node[2], index, last, initials)
+      ext.ensureLast()
+      ext.ensureParameters(2)
+      return ext.inlineFold()
+    of "foreach":
+      return ext.inlineForeach()
+    of "any":
+      warning("any is deprecated - use exists instead")
+      return ext.inlineExists()
     else:
-      error("$1 is unknown" % label, node)    
+      error("$1 is unknown" % label, ext.node)    
   else:
-    if index != 0:
-      error("seq supposed to be first", node)
-    return inlineSeq(node, last)
+    ext.ensureFirst()
+    return ext.inlineSeq()
 
-proc connectHandler(args: NimNode): NimNode =
-  result = connectFunction()
+proc iterHandler(args: NimNode): NimNode {.compileTime.} =
+  result = iterFunction()
   var code = result[^1]
-  var initials = nnkStmtList.newTree()
+  let initials = nnkStmtList.newTree()
   result[^1].add(initials)
+
+  if args.len > 0 and args[^1].len > 0:
+    let lastCall = $args[^1][0]
+    if lastCall in @["map", "indexedMap", "filter"]:
+      let resultIdent = newIdentNode("result")
+      let resultType = compileTimeTypeInfer(args)
+      let zero = quote:
+        `resultIdent` = `resultType`
+      result[^1].add(zero)
   var index = 0
+  let listRef = args[0]
   for arg in args:
-    var last = index == len(args) - 1
-    var (res, newCode) = inlineElement(arg, index, last, initials)
-    code.add(res)
+    let last = arg == args[^1]
+    let ext = arg.newExtNode(index, last, initials, listRef).inlineElement()
+    let newCode = ext.node.getStmtList()
+    code.add(ext.node)
     if newCode != nil:
       code = newCode
-    index += 1
+    if ext.nextIndexInc:
+      index += 1
   result = nnkCall.newTree(result)
-  # echo repr(result)
 
 macro connect*(args: varargs[untyped]): untyped =
-  result = connectHandler(args)
+  result = iterHandler(args)
 
-macro `-->`*(a: untyped, b: untyped): untyped =
+proc delegateMacro(a: NimNode, b:NimNode): NimNode =
   assert b.kind == nnkCall
-  var methods = b
+  let methods = b
   var m: seq[NimNode] = @[]
   var node = methods
   while node.kind == nnkCall:
@@ -228,11 +423,8 @@ macro `-->`*(a: untyped, b: untyped): untyped =
   var m2: seq[NimNode] = @[a]
   for z in countdown(high(m), low(m)):
     m2.add(m[z])
-  var mad = nnkArgList.newTree(m2)
-  result = connectHandler(mad)
-  # echo repr(result)
+  let mad = nnkArgList.newTree(m2)
+  result = iterHandler(mad)
 
-when (isMainModule):
-  let x = @[1,2,3] --> filter(it > 2).all(it > 2)
-  echo($x)
-  
+macro `-->`*(a: untyped, b: untyped): untyped =
+  result = delegateMacro(a,b)
