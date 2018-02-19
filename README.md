@@ -81,18 +81,28 @@ of technical reasons to punish functional style like that.
 This library can expand functional chains to simple loops fuzing the method bodies one after another.
 it's still very experimental, but it shows such an purely metaprogramming approach can be used to optimize functional Nim code
 
-## install
+## Variable names
 
-It should work on the C and the JS backend as well
+The supported variable names (can be changed at the beginning of the zero_functional.nim file) are:
 
-```bash
-nimble install zero_functional
-```
+* `it` is used for the iterator variable
+* `a` is used as the accumulator in fold
 
-or
 
-```bash
-zero_functional >= 0.0.3`
+## Seq and arrays
+
+All supported methods work on finite indexable types and arrays.
+For `array[A, T]` we return `array[A, T]` and we try to not do any additional allocations.
+For other types we return seq
+
+We can describe the supported types as
+
+```nim
+type
+  FiniteIndexable[T] = concept a
+    a.low is int
+    a.high is int
+    a[int] is T
 ```
 
 ## Supported methods
@@ -177,16 +187,6 @@ Get the first index of the item in the list, where the given condition is true.
 sequence --> otherOperations(..).index(cond): int
 ```
 
-### foreach
-
-Can only be used with functions that have side effects.
-As last command in the chain, the result is void. 
-As in-between element, the code is simply executed on each element. 
-
-```nim
-@[1,2,3] --> 
-    foreach(echo($it))
-```
 
 ### indexedMap
 
@@ -204,14 +204,27 @@ var n = zip(a, b, c) -->
 
 Currently a left fold (as easier to combine with the implementation)
 
-the sequtils `a` is `a`, `b` is `it`
+the sequtils `a` is `_`, `a` is `it`
 
 ```nim
 var n = zip(a, b) --> map(it[0] + it[1]).fold(0, a + it)
 ```
 
+### foreach
+
+Can only be used with functions that have side effects.
+When last command in the chain the result is void. 
+As in-between element, the code is simply executed on each element. 
+
+```nim
+@[1,2,3] --> 
+    foreach(echo($it))
+```
 
 ### LICENSE
 
 MIT, Alexander Ivanov
 
+### Contributors
+
+Substantial contributions : [Michael Schulte](https://github.com/michael72)
