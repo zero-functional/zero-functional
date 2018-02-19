@@ -1,6 +1,6 @@
 # zero-functional
 
-[![Build Status](https://travis-ci.org/michael72/zero-functional.svg?branch=dev-to-master)](https://travis-ci.org/michael72/zero-functional)
+[![Build Status](https://travis-ci.org/alehander42/zero-functional.svg?branch=master)](https://travis-ci.org/alehander42/zero-functional)
 
 A library providing (almost) zero-cost chaining for functional abstractions in Nim.
 
@@ -209,3 +209,6 @@ As in-between element, the code is simply executed on each element.
 
 MIT, Alexander Ivanov
 
+### Contributors
+
+Substantial contributions : [Michael Schulte](https://github.com/michael72)
