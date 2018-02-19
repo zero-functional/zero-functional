@@ -102,19 +102,19 @@ Those are not exactly the functions from sequtils, they have the some naming and
 The macro works as
 
 ```nim
-sequence --> map(..).exists(..)
+sequence --> map(..).any(..)
 ```
 
 or 
 
 ```nim
-zip(a, b, c) --> map(..).exists(..)
+zip(a, b, c) --> map(..).any(..)
 ```
 
 You can also use 
 
 ```nim
-inline_iter(sequence, map(..), exists(..))
+connect(sequence, map(..), any(..))
 ```
 
 The methods work with auto it variable
@@ -122,75 +122,38 @@ The methods work with auto it variable
 ### map
 
 ```nim
-sequence --> map(op)
-```
-Map each item in the list to a new value.
-Example:
-```nim
-let x = @[1,2,3] --> map(it * 2)
-check(x == @[2,4,6])
+sequence --> map(..)
 ```
 
 ### filter
 
 ```nim
-sequence --> filter(cond)
-```
-Filter the list elements with the given condition.
-Example:
-```nim
-let x = [-1,2,-3] --> filter(it > 0)
-check(x == [2])
+sequence --> filter(..)
 ```
 
 ### zip
 
-`zip` can only be used at the beginning of the command chain and it can work with n sequences
+zip is more special, it can be for now only in the begining, and it can work with n sequences
 
-### exists
+### any
 
-Check if the given condition is true for at least one element of the list.
-
-`exists` can be used only at the end of the command chain.
+any can be used only finally
 
 ```nim
-sequence --> otherOperations(..).exists(cond): bool
+sequence --> map(..).any(..)
 ```
 
 ### all
 
-Check if the given condition is true for all elements of the list.
-
-`all` can be used only at the end of the command chain.
+all can be used only finally
 
 ```nim
-sequence --> otherOperations(..).all(cond): bool
-```
-
-### index
-
-Get the first index of the item in the list, where the given condition is true.
-
-`index` can be used only at the end of the command chain.
-
-```nim
-sequence --> otherOperations(..).index(cond): int
-```
-
-### foreach
-
-Can only be used with functions that have side effects.
-As last command in the chain, the result is void. 
-As in-between element, the code is simply executed on each element. 
-
-```nim
-@[1,2,3] --> 
-    foreach(echo($it))
+sequence --> map(..).all(..)
 ```
 
 ### indexedMap
 
-Generates a tuple (index, it) for each element in the list
+Generates a tuple (position, it)
 
 ```nim
 var n = zip(a, b, c) -->
@@ -200,16 +163,15 @@ var n = zip(a, b, c) -->
             all(it > 4)
 ```
 
-### fold
+## fold
 
-Currently a left fold (as easier to combine with the implementation)
+Currently a left fold (as easier to combine with my technique)
 
 the sequtils `a` is `a`, `b` is `it`
 
 ```nim
 var n = zip(a, b) --> map(it[0] + it[1]).fold(0, a + it)
 ```
-
 
 ### LICENSE
 
