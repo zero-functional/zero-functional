@@ -92,8 +92,9 @@ The supported variable names (can be changed at the beginning of the zero_functi
 ## Seq and arrays
 
 All supported methods work on finite indexable types and arrays.
-For `array[A, T]` we return `array[A, T]` and we try to not do any additional allocations.
-For other types we return seq
+If a handler returns a collection, it will be the same shape as the input one for seq-s and arrays
+and seq for other collections(e.g. array.map returns an array). 
+You can always get a seq if you use `<handler>Seq` e.g. mapSeq.
 
 We can describe the supported types as
 
