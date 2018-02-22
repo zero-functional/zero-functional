@@ -1,4 +1,4 @@
-import strutils, sequtils, macros
+import strutils, sequtils, macros, options
 
 const iteratorVariableName = "it"
 const accuVariableName = "a"
@@ -253,6 +253,19 @@ proc inlineExists(ext: ExtNimNode): ExtNimNode {.compileTime.} =
       return true
   result = ext
 
+proc inlineFind(ext: ExtNimNode): ExtNimNode {.compileTime.} = 
+  let adaptedTest = ext.adapt()
+  let listRef = ext.listRef
+  let index = newIdentNode(indexVariableName) 
+  
+  ext.node = quote:
+    if `adaptedTest`:
+      return some(`listRef`[`index`])
+  let f = quote:
+    return none(`listRef`[0].type)
+  ext.finals.add(f)
+  result = ext
+
 proc inlineAll(ext: ExtNimNode): ExtNimNode {.compileTime.} =
   let adaptedTest = ext.adapt()
   let resultIdent = ext.res
@@ -354,6 +367,9 @@ proc inlineElement(ext: ExtNimNode): ExtNimNode {.compileTime.} =
     of "exists":
       ext.ensureLast()
       return ext.inlineExists()
+    of "find":
+      ext.ensureLast()
+      return ext.inlineFind()
     of "all":
       ext.ensureLast()
       return ext.inlineAll()

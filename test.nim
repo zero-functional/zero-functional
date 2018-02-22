@@ -1,4 +1,4 @@
-import unittest, zero_functional
+import unittest, zero_functional, options
 
 let a = @[2, 8, -4]
 let b = @[0, 1, 2]
@@ -38,7 +38,11 @@ suite "valid chains":
 
   test "index":
     check((a --> index(it > 4)) == 1)
-  
+
+  test "find":
+    check((a --> find(it > 2)) == some(8))
+    check((a --> find(it mod 5 == 0)) == none(int))
+
   test "indexedMap":
     check((a --> indexedMap(it)) == @[(0, 2), (1, 8), (2, -4)])
 
@@ -109,6 +113,10 @@ suite "valid chains":
 
   test "array index":
     check((aArray --> index(it > 4)) == 1)
+
+  test "array find":
+    check((aArray --> find(it < 0)) == some(-4))
+    check((aArray --> find(it mod 3 == 0)) == none(int))
 
   test "array indexedMap":
     check((aArray --> indexedMap(it)) == [(0, 2), (1, 8), (2, -4)])
