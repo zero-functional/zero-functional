@@ -470,7 +470,7 @@ proc iterHandler(args: NimNode): NimNode {.compileTime.} =
   
   for arg in args:
     let last = arg == args[^1]
-    let ext = arg.newExtNode(index, last, initials, finals, listRef, forceSeq).inlineElement()
+    let ext = arg.newExtNode(index, last, initials, finals, listRef).inlineElement()
     let newCode = ext.node.getStmtList()
     code.add(ext.node)
     if newCode != nil:
