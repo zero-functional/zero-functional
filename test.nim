@@ -164,3 +164,22 @@ suite "valid chains":
       map(it * 2).
       all(it > 4)
     check(not n)
+
+  test "array filterSeq":
+    check((aArray --> map(it * 2).filterSeq(it > 0)) == @[4, 16])
+
+  test "array mapSeq":
+    check((aArray --> map(it + 2).mapSeq(it * 2)) == @[8, 20, -4])
+
+  test "array indexedMapSeq":
+    check((aArray --> map(it + 2).indexedMapSeq(it).map(it[0] + it[1])) == @[4, 11, 0])
+
+  test "seq filterSeq":
+    check((a --> filterSeq(it > 0)) == @[2, 8])
+
+  test "seq mapSeq":
+    check((a --> mapSeq(it * 2)) == @[4, 16 , -8])
+
+  test "seq indexedMapSeq":
+    check((a --> indexedMapSeq(it).map(it[0] + it[1])) == @[2, 9, -2])
+
