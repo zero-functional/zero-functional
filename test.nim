@@ -193,8 +193,11 @@ suite "valid chains":
   test "seq indexedMapSeq":
     check((a --> indexedMapSeq(it).map(it[0] + it[1])) == @[2, 9, -2])
 
-  test "enum mapSeq":
-    check((Suit --> mapSeq($it)) == @["D", "H", "S", "C"])
+  test "enum map":
+    check((Suit --> map($it)) == @["D", "H", "S", "C"])
+
+  test "enum filter":
+    check((Suit --> filter($it == "H")) == @[Suit.hearts])
 
   test "enum find":
     check ((Suit --> find($it == "H")) == some(Suit.hearts))
