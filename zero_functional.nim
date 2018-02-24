@@ -572,7 +572,3 @@ proc delegateMacro(a: NimNode, b:NimNode): NimNode =
 
 macro `-->`*(a: untyped, b: untyped): untyped =
   result = delegateMacro(a,b)
-
-when isMainModule:
-  let a = [2,8,-4]
-  echo((a--> sub(1)) == [0, 8, -4])
