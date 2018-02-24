@@ -14,7 +14,20 @@ type
     hearts = (1, "H"), 
     spades = (2, "S"), 
     clubs = (3, "C")
-     
+
+type Pack = ref object
+  rows: seq[int]
+proc len(pack: Pack) : int = 
+  pack.rows.len()
+proc `[]`(pack: Pack, idx: int) : int  = 
+  pack.rows[idx]
+iterator items(a: Pack): int =
+  ## iterates over each item of `a`.
+  let L = len(a)
+  for i in 0..<L:
+    yield a[i]
+  assert(len(a) == L, "seq modified while iterating over it")
+  
 proc f(a: int, b: int): int =
   a + b
 
@@ -212,6 +225,12 @@ suite "valid chains":
   test "enum mapSeq":
     check((Suit --> mapSeq($it)) == @["D", "H", "S", "C"])
 
+  test "enum map":
+    check((Suit --> map($it)) == @["D", "H", "S", "C"])
+
+  test "enum filter":
+    check((Suit --> filter($it == "H")) == @[Suit.hearts])
+
   test "enum find":
     check ((Suit --> find($it == "H")) == some(Suit.hearts))
     check ((Suit --> find($it == "X")) == none(Suit))
@@ -232,6 +251,10 @@ suite "valid chains":
       s --> filterSeq(idx == 0 or s[idx] != s[idx-1])
     check(destutter(stuttered) == @[0,1,2,3])
     check(destutter(stutteredArr) == @[0,1,2,3])
+
+  test "generic filterSeq":
+    let p = Pack(rows: @[0,1,2,3])
+    check((p --> filterSeq(it != 0)) == @[1,2,3]) 
 
   test "empty":
     let e : seq[int] = @[]

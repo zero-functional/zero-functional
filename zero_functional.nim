@@ -138,6 +138,12 @@ proc mapSeqInternal*[A, T, U](a: array[A, T], handler: proc(element: T): U): seq
 proc indexedMapSeqInternal*[A, T, U](a: array[A, T], handler: proc(element: (int, T)): U): seq[U] =
   @[]
 
+proc mapInternal*[U](a: typedesc[enum], handler: proc(element: a): U): seq[U] =
+  @[]
+
+proc filterInternal*(a: typedesc[enum], handler: proc(element: a): bool): seq[a] =
+  @[]
+
 proc newExtNode(node: NimNode, 
                    index: int, 
                    isLastItem: bool,
