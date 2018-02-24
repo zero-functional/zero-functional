@@ -184,6 +184,16 @@ suite "valid chains":
   test "array indexedMapSeq":
     check((aArray --> map(it + 2).indexedMapSeq(it).map(it[0] + it[1])) == @[4, 11, 0])
 
+  test "array sub":
+    check((aArray--> sub(1)) == [0, 8, -4])
+    check((aArray --> sub(1,2)) == [0, 8, 0])
+    check((aArray --> sub(1,^1)) == [0, 8, 0])
+
+  test "array subSeq":
+    check((aArray --> subSeq(1)) == @[8, -4])
+    check((aArray --> subSeq(1,2)) == @[8])
+    check((aArray --> subSeq(1,^1)) == @[8])
+    
   test "seq filterSeq":
     check((a --> filterSeq(it > 0)) == @[2, 8])
 
@@ -193,9 +203,17 @@ suite "valid chains":
   test "seq indexedMapSeq":
     check((a --> indexedMapSeq(it).map(it[0] + it[1])) == @[2, 9, -2])
 
+  test "seq sub":
+    check((a --> filter(idx >= 1)) == @[8, -4])
+    check((a --> sub(1)) == @[8, -4])
+    check((a --> sub(1,2)) == @[8])
+    check((a --> sub(1,^1)) == @[8])
+
   test "enum mapSeq":
     check((Suit --> mapSeq($it)) == @["D", "H", "S", "C"])
 
   test "enum find":
     check ((Suit --> find($it == "H")) == some(Suit.hearts))
     check ((Suit --> find($it == "X")) == none(Suit))
+
+    
