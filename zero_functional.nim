@@ -26,11 +26,6 @@ when false: #TODO not used at the moment
       a.high is int
       a[int] is T
 
-type
-  EnumLike*[T] = concept a
-    a.low is T
-    a.high is T
-
 static: # I can't concat sets, so I need to use var
   let SEQUENCE_HANDLERS = ["map", "indexedMap", "filter", "filterSeq", "mapSeq", "indexedMapSeq"].toSet
   var HANDLERS = ["zip", "exists", "any", "all", "index", "fold", "foreach", "find"].toSet
@@ -131,10 +126,10 @@ proc mapSeqInternal*[A, T, U](a: array[A, T], handler: proc(element: T): U): seq
 proc indexedMapSeqInternal*[A, T, U](a: array[A, T], handler: proc(element: (int, T)): U): seq[U] =
   @[]
 
-proc mapInternal*[U](a: typedesc, handler: proc(element: a): U): seq[U] =
+proc mapInternal*[U](a: typedesc[enum], handler: proc(element: a): U): seq[U] =
   @[]
 
-proc filterInternal*(a: typedesc, handler: proc(element: a): bool): seq[a] =
+proc filterInternal*(a: typedesc[enum], handler: proc(element: a): bool): seq[a] =
   @[]
 
 proc newExtNode(node: NimNode, 

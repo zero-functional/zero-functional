@@ -14,7 +14,9 @@ type
     hearts = (1, "H"), 
     spades = (2, "S"), 
     clubs = (3, "C")
-     
+  
+  A = object
+
 proc f(a: int, b: int): int =
   a + b
 
