@@ -216,4 +216,28 @@ suite "valid chains":
     check ((Suit --> find($it == "H")) == some(Suit.hearts))
     check ((Suit --> find($it == "X")) == none(Suit))
 
-    
+  test "multi ascending":
+    template ascending(s: untyped) : bool = # check if the elements in seq or array are in ascending order
+      s --> sub(1).all(s[idx]-s[idx-1] > 0)
+      #s --> all(idx == 0 or s[idx]-s[idx-1] > 0)
+    check(ascending(a) == false)
+    check(ascending(b) == true)
+    check(ascending(aArray) == false)
+    check(ascending(bArray) == true)
+
+  test "filter template":
+    let stuttered = @[0,1,1,2,2,2,3,3]
+    let stutteredArr = [0,0,1,2,3,3]
+    template destutter(s: untyped) : untyped =
+      s --> filterSeq(idx == 0 or s[idx] != s[idx-1])
+    check(destutter(stuttered) == @[0,1,2,3])
+    check(destutter(stutteredArr) == @[0,1,2,3])
+
+  test "empty":
+    let e : seq[int] = @[]
+    let res : seq[int] = @[]
+    check((e --> all(false)) == true)
+    check((e --> exists(false)) == false)
+    check((e --> map(it * 2)) == res)
+    check((e --> filter(it > 0).map(it * 2)) == res)
+

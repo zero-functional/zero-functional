@@ -475,7 +475,7 @@ proc inlineElement(ext: ExtNimNode): ExtNimNode {.compileTime.} =
     ext.ensureFirst()
     return ext.inlineSeq()
 
-proc iterHandler(args: NimNode): NimNode {.compileTime.} =
+proc iterHandler(args: NimNode, debug=false): NimNode {.compileTime.} =
   result = iterFunction()
   var code = result[^1]
   let initials = nnkStmtList.newTree()
@@ -540,12 +540,17 @@ proc iterHandler(args: NimNode): NimNode {.compileTime.} =
         `idxIdent` += 1
       forNode[^1].add(incrIdx)
 
+  if (debug):
+    echo(repr(result))
+    # for the whole tree do:
+    # echo(treeRepr(result))
+    
   result = nnkCall.newTree(result)
 
 macro connect*(args: varargs[untyped]): untyped =
   result = iterHandler(args)
 
-proc delegateMacro(a: NimNode, b:NimNode): NimNode =
+proc delegateMacro(a: NimNode, b:NimNode, debug=false): NimNode =
   expectKind(b, nnkCall)
   let methods = b
   var m: seq[NimNode] = @[]
@@ -568,7 +573,11 @@ proc delegateMacro(a: NimNode, b:NimNode): NimNode =
   for z in countdown(high(m), low(m)):
     m2.add(m[z])
   let mad = nnkArgList.newTree(m2)
-  result = iterHandler(mad)
+  result = iterHandler(mad, debug)
 
 macro `-->`*(a: untyped, b: untyped): untyped =
   result = delegateMacro(a,b)
+
+## use this macro for debugging - will output the created code
+macro `-->>`*(a: untyped, b: untyped): untyped =
+  result = delegateMacro(a,b,true)
