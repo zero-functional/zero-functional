@@ -8,6 +8,15 @@ let aArray = [2, 8, -4]
 let bArray = [0, 1, 2]
 let cArray = ["zero", "one", "two"]
 
+type 
+  Suit {.pure.} = enum
+    diamonds = (0, "D"),
+    hearts = (1, "H"), 
+    spades = (2, "S"), 
+    clubs = (3, "C")
+  
+  A = object
+
 proc f(a: int, b: int): int =
   a + b
 
@@ -105,6 +114,9 @@ suite "valid chains":
   test "array filter":
     check((aArray --> filter(it > 2)) == [0, 8, 0])
 
+  test "array filterSeq":
+    check((aArray --> filterSeq(it > 2)) == @[8])
+
   test "array exists":
     check((aArray --> exists(it > 0)))
 
@@ -183,3 +195,12 @@ suite "valid chains":
   test "seq indexedMapSeq":
     check((a --> indexedMapSeq(it).map(it[0] + it[1])) == @[2, 9, -2])
 
+  test "enum map":
+    check((Suit --> map($it)) == @["D", "H", "S", "C"])
+
+  test "enum filter":
+    check((Suit --> filter($it == "H")) == @[Suit.hearts])
+
+  test "enum find":
+    check ((Suit --> find($it == "H")) == some(Suit.hearts))
+    check ((Suit --> find($it == "X")) == none(Suit))

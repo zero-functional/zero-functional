@@ -7,6 +7,7 @@ const indexVariableName = "idx"
 const internalIteratorName = "__" & iteratorVariableName & "__"
 const useInternalAccu = accuVariableName != "result"
 const internalAccuName = if (useInternalAccu): "__" & accuVariableName & "__" else: "result"
+const emptyIdentifier = "__empty__"
 
 type 
   ExtNimNode = ref object ## Store additional info the current NimNode used in the inline... functions
@@ -125,6 +126,12 @@ proc mapSeqInternal*[A, T, U](a: array[A, T], handler: proc(element: T): U): seq
 proc indexedMapSeqInternal*[A, T, U](a: array[A, T], handler: proc(element: (int, T)): U): seq[U] =
   @[]
 
+proc mapInternal*[U](a: typedesc[enum], handler: proc(element: a): U): seq[U] =
+  @[]
+
+proc filterInternal*(a: typedesc[enum], handler: proc(element: a): bool): seq[a] =
+  @[]
+
 proc newExtNode(node: NimNode, 
                    index: int, 
                    isLastItem: bool,
@@ -240,8 +247,13 @@ proc inlineMap(ext: ExtNimNode, indexed: bool = false, toSeq: bool = false): Ext
         else:
           `resultIdent`.add(`next`)
     else:
+      let emptyIdent = newIdentNode(emptyIdentifier)
       ext.node = quote:
-        `resultIdent`.add(`next`)
+        if `emptyIdent`:
+          `emptyIdent` = false
+          `resultIdent` = @[`next`]
+        else:
+          `resultIdent`.add(`next`)
   else:
     ext.node = quote:
       let `itIdent` = `next`
@@ -262,8 +274,13 @@ proc inlineFilter(ext: ExtNimNode, toSeq: bool = false): ExtNimNode {.compileTim
         else:
           `resultIdent`.add(`itPrevIdent`)
     else:
+      let emptyIdent = newIdentNode(emptyIdentifier)
       push = quote:
-        `resultIdent`.add(`itPrevIdent`)
+        if `emptyIdent`:
+          `emptyIdent` = false
+          `resultIdent` = @[`itPrevIdent`]
+        else:
+          `resultIdent`.add(`itPrevIdent`)
     ext.node = quote:
       if `adaptedTest`:
         `push`
@@ -286,15 +303,13 @@ proc inlineExists(ext: ExtNimNode): ExtNimNode {.compileTime.} =
 
 proc inlineFind(ext: ExtNimNode): ExtNimNode {.compileTime.} = 
   let adaptedTest = ext.adapt()
-  let listRef = ext.listRef
-  let index = newIdentNode(indexVariableName) 
-  
+  let resultIdent = ext.res
+  let itIdent = ext.prevItNode()
   ext.node = quote:
     if `adaptedTest`:
-      return some(`listRef`[`index`])
-  let f = quote:
-    return none(`listRef`[0].type)
-  ext.finals.add(f)
+      return some(`itIdent`)
+    else:
+      `resultIdent` = none(`itIdent`.type) # TODO: this should be optimized
   result = ext
 
 proc inlineAll(ext: ExtNimNode): ExtNimNode {.compileTime.} =
@@ -315,6 +330,7 @@ proc inlineForeach(ext: ExtNimNode): ExtNimNode {.compileTime.} =
     let listRef = ext.listRef
     let index = newIdentNode(indexVariableName) 
     ext.node = quote:
+      # changing the iterator content will only work with indexable + variable containers
       `listRef`[`index`] = nil
     for idx,child in ext.node:
       if child.kind == nnkNilLit:
@@ -366,7 +382,8 @@ proc inlineSeq(ext: ExtNimNode): ExtNimNode {.compileTime.} =
   let node = ext.node
   let idxIdent = newIdentNode(indexVariableName)
   ext.node = quote:
-    for `idxIdent`, `itIdent` in `node`:
+    var `idxIdent` = 0
+    for `itIdent` in `node`:
       nil
   ext.nextIndexInc = true
   result = ext
@@ -435,18 +452,28 @@ proc iterHandler(args: NimNode): NimNode {.compileTime.} =
   var code = result[^1]
   let initials = nnkStmtList.newTree()
   result[^1].add(initials)
+  var forceSeq = false
 
   if args.len > 0 and args[^1].len > 0:
     let lastCall = $args[^1][0]
     if lastCall in SEQUENCE_HANDLERS:
+      forceSeq = lastCall.endsWith("Seq")
       let resultIdent = newIdentNode("result")
-      let resultType = compileTimeTypeInfer(args)
-      let zero = quote:
-        `resultIdent` = `resultType`
+      let zero = 
+        if not forceSeq:
+          let resultType = compileTimeTypeInfer(args)
+          quote:
+            `resultIdent` = `resultType`
+        else:
+          let emptyIdent = newIdentNode(emptyIdentifier)
+          quote:
+            var `emptyIdent` = true
+
       result[^1].add(zero)
   var index = 0
   let listRef = args[0]
   let finals = nnkStmtList.newTree()
+  
   for arg in args:
     let last = arg == args[^1]
     let ext = arg.newExtNode(index, last, initials, finals, listRef).inlineElement()
@@ -458,7 +485,25 @@ proc iterHandler(args: NimNode): NimNode {.compileTime.} =
       index += 1
   if finals.len > 0:
     result[^1].add(finals)
-  
+
+  proc findForNode(node: NimNode) : NimNode = 
+    if node.kind == nnkForStmt:
+      return node
+    for child in node:
+      let res = child.findForNode()
+      if res != nil:
+        return res
+    return nil
+
+  if args[0].len == 0 or (args[0][0].kind == nnkIdent and $args[0][0] != "zip"):
+    let forNode = result.findForNode()
+    if forNode != nil:
+      # add index increment to end of the for loop
+      let idxIdent = newIdentNode(indexVariableName)
+      let incrIdx = quote:
+        `idxIdent` += 1
+      forNode[^1].add(incrIdx)
+
   result = nnkCall.newTree(result)
 
 macro connect*(args: varargs[untyped]): untyped =
@@ -491,3 +536,4 @@ proc delegateMacro(a: NimNode, b:NimNode): NimNode =
 
 macro `-->`*(a: untyped, b: untyped): untyped =
   result = delegateMacro(a,b)
+  # echo result.repr
