@@ -21,12 +21,10 @@ proc len(pack: Pack) : int =
   pack.rows.len()
 proc `[]`(pack: Pack, idx: int) : int  = 
   pack.rows[idx]
-iterator items(a: Pack): int =
-  ## iterates over each item of `a`.
-  let L = len(a)
-  for i in 0..<L:
-    yield a[i]
-  assert(len(a) == L, "seq modified while iterating over it")
+proc add(pack: Pack, t: int)  = 
+  pack.rows.add(t)
+proc initInternal*(pack: Pack) : Pack = 
+  Pack(rows: @[])
   
 proc f(a: int, b: int): int =
   a + b
@@ -70,19 +68,22 @@ suite "valid chains":
     check((a --> fold(0, a + it)) == 6)
 
   test "map with filter":
-    check((a --> map(it + 2) --> filter(it mod 4 == 0)) == @[4])
+    check((a --> map(it + 2).filter(it mod 4 == 0)) == @[4])
 
   test "map with exists":
-    check((a --> map(it + 2) --> exists(it mod 4 == 0)))
+    check((a --> map(it + 2).exists(it mod 4 == 0)))
 
   test "map with all":
-    check(not (a --> map(it + 2) --> all(it mod 4 == 0)))
+    check(not (a --> map(it + 2).all(it mod 4 == 0)))
 
   test "map with fold":
-    check((a --> map(g(it)) --> fold(0, a + it)) == 10)
+    check((a --> map(g(it)).fold(0, a + it)) == 10)
 
+  test "map with changed type":
+    check((a --> mapSeq($it)) == @["2", "8", "-4"])
+  
   test "filter with exists":
-    check(not (a --> filter(it > 2) --> exists(it == 4)))
+    check(not (a --> filter(it > 2).exists(it == 4)))
 
   test "filter with index":
     check((a --> filter(it mod 2 == 0).index(it < 0)) == 2)
@@ -111,13 +112,13 @@ suite "valid chains":
     check(not n)
 
   test "zip with array":
-    check((zip(aArray, bArray) --> map(it[0] + it[1])) == [2, 9, -2])
+    check((zip(aArray, bArray) --> map(it[0] + it[1])) == @[2, 9, -2])
 
   test "array basic filter":
     check((aArray --> filter(it > 0)) == [2, 8, 0])
 
   test "array basic zip":
-    check((zip(aArray, bArray, cArray) --> filter(it[0] > 0 and it[2] == "one")) == [(0, 0, nil), (8, 1, "one"), (0, 0, nil)])
+    check((zip(aArray, bArray, cArray) --> filter(it[0] > 0 and it[2] == "one")) == @[(8, 1, "one")])
 
   test "array map":
     check((aArray --> map(it - 1)) == [1, 7, -5])
@@ -142,7 +143,8 @@ suite "valid chains":
     check((aArray --> find(it mod 3 == 0)) == none(int))
 
   test "array indexedMap":
-    check((aArray --> indexedMap(it)) == [(0, 2), (1, 8), (2, -4)])
+    check((aArray --> indexedMap(it)) == @[(0, 2), (1, 8), (2, -4)])
+    check((aArray --> map(it + 2).indexedMap(it).map(it[0] + it[1])) == @[4, 11, 0])
   
   test "array fold":
     check((aArray --> fold(0, a + it)) == 6)
@@ -194,9 +196,6 @@ suite "valid chains":
   test "array mapSeq":
     check((aArray --> map(it + 2).mapSeq(it * 2)) == @[8, 20, -4])
 
-  test "array indexedMapSeq":
-    check((aArray --> map(it + 2).indexedMapSeq(it).map(it[0] + it[1])) == @[4, 11, 0])
-
   test "array sub":
     check((aArray--> sub(1)) == [0, 8, -4])
     check((aArray --> sub(1,2)) == [0, 8, 0])
@@ -213,8 +212,8 @@ suite "valid chains":
   test "seq mapSeq":
     check((a --> mapSeq(it * 2)) == @[4, 16 , -8])
 
-  test "seq indexedMapSeq":
-    check((a --> indexedMapSeq(it).map(it[0] + it[1])) == @[2, 9, -2])
+  test "seq indexedMap":
+    check((a --> indexedMap(it).map(it[0] + it[1])) == @[2, 9, -2])
 
   test "seq sub":
     check((a --> filter(idx >= 1)) == @[8, -4])
@@ -225,11 +224,8 @@ suite "valid chains":
   test "enum mapSeq":
     check((Suit --> mapSeq($it)) == @["D", "H", "S", "C"])
 
-  test "enum map":
-    check((Suit --> map($it)) == @["D", "H", "S", "C"])
-
-  test "enum filter":
-    check((Suit --> filter($it == "H")) == @[Suit.hearts])
+  test "enum filterSeq":
+    check((Suit --> filterSeq($it == "H")) == @[Suit.hearts])
 
   test "enum find":
     check ((Suit --> find($it == "H")) == some(Suit.hearts))
@@ -252,9 +248,10 @@ suite "valid chains":
     check(destutter(stuttered) == @[0,1,2,3])
     check(destutter(stutteredArr) == @[0,1,2,3])
 
-  test "generic filterSeq":
+  test "generic filter":
     let p = Pack(rows: @[0,1,2,3])
     check((p --> filterSeq(it != 0)) == @[1,2,3]) 
+    check((p --> filter(it != 0)).rows ==  @[1,2,3])
 
   test "empty":
     let e : seq[int] = @[]
@@ -264,3 +261,14 @@ suite "valid chains":
     check((e --> map(it * 2)) == res)
     check((e --> filter(it > 0).map(it * 2)) == res)
 
+  test "flatten":
+    let f = @[@[1,2,3],@[4,5],@[6]]
+    check((f --> flatten()) == @[1,2,3,4,5,6])
+
+  test "flatten sum":
+    check((@[a,b] --> flatten().fold(0, a + it)) == 9)
+
+  test "zip flatten":
+    # TODO iterate tuple?!
+    #echo((zip(a,b) --> flatten()))
+    check((zip(a,b) --> flatten()) == @[2,0,8,1,-4,2])
