@@ -298,10 +298,10 @@ Result type depends on the function used as last parameter.
 |zip            |   +       |            |            | seq[(*,..,*)]               |
 |to             |           |            |   virtual  | given type                  |
 
-*: any type depending on given function parameters
-list: is any input-list type
-orig: is the original list type
-to: is a "virtual" function, can only be given as last argument, but does not count as last argument.
++ *: any type depending on given function parameters
++ list: is any input-list type
++ orig: is the original list type
++ to: is a "virtual" function, can only be given as last argument, but does not count as last argument.
 
 
 ### LICENSE
