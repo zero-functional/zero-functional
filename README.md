@@ -214,7 +214,7 @@ the sequtils `a` is `_`, `a` is `it`
 var n = zip(a, b) --> map(it[0] + it[1]).fold(0, a + it)
 ```
 
-## reduce
+### reduce
 
 Same as fold, but with the iterator converted to a tuple where
 `it[0]` is the current result and `it[1]` the actual iterator on the list.
