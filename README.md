@@ -108,26 +108,47 @@ type
     a[int] is T
 ```
 
+## Other types
+
+Enums are supported and mapped to `seq[enumtype]`.
+Generic objects are supported if they are of any type:
+ + FiniteIndexable - contains `high`/`low` and []-access (see above)
+ + FiniteIndexableLen - contains `len` and `[]`
+
+List types that will be generated as as result type need to implement either one of 
+ + Appendable (contains the `append` function as in DoublyLinkedList)
+ + Addable (contains the `add` function as in `seq`)
+ + `[]=` operator
+Some of the supported methods will only work when the `[]=` operator is defined - except when using DoublyLinkedList or SinglyLinkedList types. This is needed for `zip`, `combinations` and `foreach` when changing elements.
+ 
+For the creation of a generic type as result, the type needs to implement
+```nim
+proc init_zf(a: MyType): MyType =
+  MyType(...)
+  # the `a` is not actually used but is needed for overloading.
+```
+ 
 ## Supported methods
 
 Those are not exactly the functions from sequtils, they have the some naming and almost the same behavior
 
-The macro works as
+The macro works `-->` or `connect`. Multiple `-->` may be used or `.`.
 
 ```nim
-sequence --> map(..).exists(..)
+sequence --> map(..) --> all(..)
 ```
 
 or 
 
 ```nim
-zip(a, b, c) --> map(..).exists(..)
+zip(a, b, c) --> map(..).
+                 all(..)
 ```
 
 You can also use 
 
 ```nim
-inline_iter(sequence, map(..), exists(..))
+connect(sequence, map(..), all(..))
 ```
 
 The methods work with auto it variable
@@ -140,8 +161,8 @@ sequence --> map(op)
 Map each item in the list to a new value. 
 Example:
 ```nim
-let x = @[1,2,3] --> map(it * 2)
-check(x == @[2,4,6])
+let x = [1,2,3] --> map(it * 2)
+check(x == [2,4,6])
 ```
 Map also supports converting the type of iterator item and thus of the list.
 
@@ -153,8 +174,8 @@ sequence --> filter(cond)
 Filter the list elements with the given condition.
 Example:
 ```nim
-let x = [-1,2,-3] --> filter(it > 0)
-check(x == [2])
+let x = @[-1,2,-3] --> filter(it > 0)
+check(x == @[2])
 ```
 
 ### zip
@@ -168,7 +189,7 @@ Check if the given condition is true for at least one element of the list.
 `exists` can be used only at the end of the command chain.
 
 ```nim
-sequence --> otherOperations(..).exists(cond): bool
+sequence --> otherOperations(..) --> exists(cond): bool
 ```
 
 ### all
@@ -178,7 +199,7 @@ Check if the given condition is true for all elements of the list.
 `all` can be used only at the end of the command chain.
 
 ```nim
-sequence --> otherOperations(..).all(cond): bool
+sequence --> otherOperations(..) --> all(cond): bool
 ```
 
 ### index
@@ -188,7 +209,7 @@ Get the first index of the item in the list, where the given condition is true.
 `index` can be used only at the end of the command chain.
 
 ```nim
-sequence --> otherOperations(..).index(cond): int
+sequence --> otherOperations(..) --> index(cond): int
 ```
 
 
@@ -208,16 +229,18 @@ var n = zip(a, b, c) -->
 
 Currently a left fold (as easier to combine with the implementation)
 
-the sequtils `a` is `_`, `a` is `it`
+the sequtils `a` is `a`, `b` is `it`
 
 ```nim
-var n = zip(a, b) --> map(it[0] + it[1]).fold(0, a + it)
+var n = zip(a, b) --> map(it[0] + it[1]) --> fold(0, a + it)
 ```
 
 ### reduce
 
 Same as fold, but with the iterator converted to a tuple where
 `it[0]` is the current result and `it[1]` the actual iterator on the list.
+Also the first item of the list is used as initial value - the other items
+are then accumulated to it.
 
 ```nim
 var n = a --> reduce(it[0] + it[1])
@@ -252,7 +275,7 @@ check(@[@[1,2], @[3,4]] --> flatten() == @[1,2,3,4])
 
 Combines each element with each other - the resulting variable is `c` with `c.it` as array of 2 containing the combined
 iterator values and `c.idx` containg their indices.
-Combinatiions is not allowed as last argument.
+`combinations` is not allowed as last argument.
 
 ```nim
 # find the indices of the elements in the list, where the diff to the other element is 1
