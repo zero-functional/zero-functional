@@ -1,15 +1,12 @@
 import times, os, strutils, sequtils, macros
 
-template header(a: NimNode): untyped =
-  var `a` = epochTime()
-
 template finish(benchmarkName: string, a: NimNode): untyped =
   let elapsed = epochTime() - `a`
   let elapsedStr = elapsed.formatFloat(format = ffDecimal, precision = 3)
   echo "$1 $2" % [benchmarkName, elapsedStr]
 
 macro benchmark*(benchmarkName: static[string], code: untyped): untyped =
-  var a = newIdentNode(!("c$1" % benchmarkName)) # WORKS FOR MY SITUATION
+  var a = newIdentNode("c$1" % benchmarkName) # WORKS FOR MY SITUATION
   result = nnkStmtList.newTree()
   var empty = newEmptyNode()
   result.add(nnkVarSection.newTree(
@@ -17,7 +14,7 @@ macro benchmark*(benchmarkName: static[string], code: untyped): untyped =
       a,
       empty,
       nnkCall.newTree(
-        newIdentNode(!"epochTime")))))
+        newIdentNode("epochTime")))))
   result.add(code)
   result.add(getAst(finish(benchmarkName, a)))
   # echo repr(result)

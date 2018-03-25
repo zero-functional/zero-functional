@@ -78,7 +78,7 @@ Functional style handling of sequences is awesome, and nim is supposed to be fas
 Allocating new sequences on each method in chains can be extremely wasteful and there are not a lot
 of technical reasons to punish functional style like that.
 
-This library can expand functional chains to simple loops fuzing the method bodies one after another.
+This library can expand functional chains to simple loops fusing the method bodies one after another.
 it's still very experimental, but it shows such an purely metaprogramming approach can be used to optimize functional Nim code
 
 ## Variable names
@@ -86,15 +86,17 @@ it's still very experimental, but it shows such an purely metaprogramming approa
 The supported variable names (can be changed at the beginning of the zero_functional.nim file) are:
 
 * `it` is used for the iterator variable
-* `a` is used as the accumulator in fold
-
+* `idx` is used as integer index of current iteration
+* `a` is used as the accumulator in `fold`
+* `c` is used as combination element in `combinations`
 
 ## Seq and arrays
 
 All supported methods work on finite indexable types and arrays.
-If a handler returns a collection, it will be the same shape as the input one for seq-s and arrays
-and seq for other collections(e.g. array.map returns an array). 
-You can always get a seq if you use `<handler>Seq` e.g. mapSeq.
+If a handler returns a collection, it will be the same shape as the input one for seq-s, arrays and DoublyLinkedList-s.
+Other collections are mapped to seq if it cannot be automatically converted. (e.g. array.map returns an array). 
+You can always get a seq if you use `<handler>Seq` e.g. `mapSeq` - or `to(seq)`.
+Some of the supported methods default to seq-output, e.g. map when changing the result type, flatten and indexedMap.
 
 We can describe the supported types as
 
@@ -106,26 +108,47 @@ type
     a[int] is T
 ```
 
+## Other types
+
+Enums are supported and mapped to `seq[enumtype]`.
+Generic objects are supported if they are of any type:
+ + FiniteIndexable - contains `high`/`low` and []-access (see above)
+ + FiniteIndexableLen - contains `len` and `[]`
+
+Collection types that will be generated as as result type need to implement either one of 
+ + Appendable (contains the `append` function as in DoublyLinkedList)
+ + Addable (contains the `add` function as in `seq`)
+ + `[]=` operator
+Some of the supported methods will only work when the `[]=` operator is defined - except when using DoublyLinkedList or SinglyLinkedList types. This is needed for `zip`, `combinations` and `foreach` when changing elements.
+ 
+For the creation of a generic type as result, the type needs to implement
+```nim
+proc init_zf(a: MyType): MyType =
+  MyType(...)
+  # the `a` is not actually used but is needed for overloading.
+```
+ 
 ## Supported methods
 
 Those are not exactly the functions from sequtils, they have the some naming and almost the same behavior
 
-The macro works as
+The macro works `-->` or `connect`. Multiple `-->` may be used or `.`.
 
 ```nim
-sequence --> map(..).exists(..)
+sequence --> map(..) --> all(..)
 ```
 
 or 
 
 ```nim
-zip(a, b, c) --> map(..).exists(..)
+zip(a, b, c) --> map(..).
+                 all(..)
 ```
 
 You can also use 
 
 ```nim
-inline_iter(sequence, map(..), exists(..))
+connect(collection, map(..), all(..))
 ```
 
 The methods work with auto it variable
@@ -133,25 +156,26 @@ The methods work with auto it variable
 ### map
 
 ```nim
-sequence --> map(op)
+collection --> map(op)
 ```
-Map each item in the list to a new value.
+Map each item in the collection to a new value. 
 Example:
 ```nim
-let x = @[1,2,3] --> map(it * 2)
-check(x == @[2,4,6])
+let x = [1,2,3] --> map(it * 2)
+check(x == [2,4,6])
 ```
+Map also supports converting the type of iterator item and thus of the collection.
 
 ### filter
 
 ```nim
 sequence --> filter(cond)
 ```
-Filter the list elements with the given condition.
+Filter the collection items with the given condition.
 Example:
 ```nim
-let x = [-1,2,-3] --> filter(it > 0)
-check(x == [2])
+let x = @[-1,2,-3] --> filter(it > 0)
+check(x == @[2])
 ```
 
 ### zip
@@ -160,38 +184,38 @@ check(x == [2])
 
 ### exists
 
-Check if the given condition is true for at least one element of the list.
+Check if the given condition is true for at least one element of the collection.
 
 `exists` can be used only at the end of the command chain.
 
 ```nim
-sequence --> otherOperations(..).exists(cond): bool
+sequence --> otherOperations(..) --> exists(cond): bool
 ```
 
 ### all
 
-Check if the given condition is true for all elements of the list.
+Check if the given condition is true for all elements of the collection.
 
 `all` can be used only at the end of the command chain.
 
 ```nim
-sequence --> otherOperations(..).all(cond): bool
+sequence --> otherOperations(..) --> all(cond): bool
 ```
 
 ### index
 
-Get the first index of the item in the list, where the given condition is true.
+Get the first index of the item in the collection, where the given condition is true.
 
 `index` can be used only at the end of the command chain.
 
 ```nim
-sequence --> otherOperations(..).index(cond): int
+sequence --> otherOperations(..) --> index(cond): int
 ```
 
 
 ### indexedMap
 
-Generates a tuple (index, it) for each element in the list
+Generates a tuple (index, it) for each element in the collection
 
 ```nim
 var n = zip(a, b, c) -->
@@ -205,22 +229,131 @@ var n = zip(a, b, c) -->
 
 Currently a left fold (as easier to combine with the implementation)
 
-the sequtils `a` is `_`, `a` is `it`
+the sequtils `a` is `a`, `b` is `it`
 
 ```nim
-var n = zip(a, b) --> map(it[0] + it[1]).fold(0, a + it)
+var n = zip(a, b) --> map(it[0] + it[1]) --> fold(0, a + it)
+```
+
+### reduce
+
+Same as fold, but with the iterator converted to a tuple where
+`it[0]` is the current result and `it[1]` the actual iterator on the collection.
+Also the first item of the collection is used as initial value - the other items
+are then accumulated to it.
+
+```nim
+var n = a --> reduce(it[0] + it[1])
 ```
 
 ### foreach
 
 Can only be used with functions that have side effects.
 When last command in the chain the result is void. 
-As in-between element, the code is simply executed on each element. 
+As in-between element, the code is simply executed on each element.
+
+#### changing in-place
+The iterator content may be changed in foreach resulting in changing
+the original collection.
+However there are a few restrictions (see test.nim):
++ the `[]=` operator has to be available for the underlying collection type (exception: the std LinkedList types)
++ functions, that alter the collection elements may not be used in the chain before (e.g. `map` is not allowed, but `filter` is).
 
 ```nim
 @[1,2,3] --> 
     foreach(echo($it))
+    
+var a = @[1,2,3]
+a --> foreach(it = it * 2)
+check (a == @[2,4,6]
 ```
+
+### flatten
+
+Working on a collection of iterable items, the flatten function flattens out the elements of the collection.
+
+```nim
+check(@[@[1,2],@[3],@[4,5,6]] --> flatten() == @[1,2,3,4,5,6])
+```
+
+### combinations
+
+Combines each item of the original collection with each other - the resulting variable is `c` with `c.it` as array of 2 containing the combined
+iterator values and `c.idx` containg their indices.
+`combinations` is not allowed as last argument.
+
+```nim
+# find the indices of the elements in the collection, where the diff to the other element is 1
+check(@[11,2,7,3,4] --> combinations() --> filter(abs(c.it[1]-c.it[0]) == 1) --> map(c.idx) == @[[1,3],[3,4]])
+#          ^   ^ ^
+```
+
+### to
+
+Finally it is possible to force the result type to the type given in `to` - which is only allowed as last argument when generating 
+collection results (e.g. `map` or `filter` are last arguments before `to`).
+This method is handled differently from the others and removed internally so the command before `to` is the actual last argument. 
+
+When the result type is given as `seq`, `array` or `list` (the latter is mapped to `DoublyLinkedList`) then the template argument
+can be determined automatically.
+However when all auto-detection fails, the result type may be given explicitly here - the resulting code is also a bit more efficient.
+
+```nim
+check([1,2,3]) --> to(seq) == @[1,2,3])
+var l = @[1,2,3] --> map($it) --> to(list)
+let l2: DoublyLinkedList[string] = l
+echo(l2)
+```
+
+## Overview Table
+
+Result type depends on the function used as last parameter.
+
+| Command       | 1st Param | in-between | Last Param | Result Type                 |
+| ------------- | --------- | ---------- | ---------- | --------------------------- | 
+|all            |           |            |     +      | bool                        |
+|combinations   |   +       |            |            | map(it): coll[Combination]  |
+|exists         |           |            |     +      | bool                        |
+|filter         |   +       |     +      |     +      | part coll / zeroed array    |
+|find           |           |            |     +      | int                         |
+|flatten        |   +       |     +      |     +      | coll                        |
+|fold           |           |            |     +      | *                           |
+|foreach        |   +       |     +      |     +      | void                        |
+|index          |           |            |     +      | int                         |
+|indexedMap     |   +       |     +      |     +      | seq[(int,*)]                |
+|map            |   +       |     +      |     +      | collType[*]                 |
+|reduce         |           |            |     +      | *                           |
+|sub            |   +       |     +      |     +      | part coll / zeroed array    |
+|zip            |   +       |            |            | map(it): seq[(*,..,*)]      |
+|to             |           |            |   virtual  | given type                  |
+
++ *: any type depending on given function parameters
++ coll: is the input collection
++ collType is the input collection type (without template argument)
++ map(it): some functions are not allowed as last parameter but using map(it) will yield the given output
++ to: is a "virtual" function, can only be given as last argument, but does not count as last argument.
+
+## Debugging using `-->>`
+
+As `zero_functional` is still work in progress and macros are still kind of experimental in Nim, it can happen, that the compiler
+crashes or that actual compile errors are reported in a not understandable way. To see the actual code that is generated (provided the generation itself doe not crash)
+you can use the `-->>` operator which prints the representation `repr` of the actual generated nim code.
+It is also useful for checking what the expression is actually generating under the hood.
+
+```nim
+let a = [1,2,3]
+a -->> foreach(echo(it))
+```
+
+will print during compilation:
+```nim
+if true:
+  for __it__0 in a:
+    echo(__it__0)
+```
+
+The printed code can be copied to your actual program for further investigation.
+Remember to remove the dunder (double-underscores) of the generated variables before compiling the generated code and watch out for name-clashes with your own code.
 
 ### LICENSE
 
