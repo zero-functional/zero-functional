@@ -1,6 +1,6 @@
 import unittest, zero_functional, options, lists, macros, strutils
 
-# different lists
+# different sequences
 let a = @[2, 8, -4]
 let b = @[0, 1, 2]
 let c = @["zero", "one", "two"]
@@ -22,18 +22,31 @@ type
   ## User-defined that supports Iterator and random access. 
   Pack = ref object
     rows: seq[int]
+
+  UsePack = ref object
+    packs: seq[Pack]
+
+  ShowPack = ref object
   
   ## same as Pack but without the `add` function
   PackWoAdd = ref object
     rows: seq[int]
+
+  SimpleIter = ref object
+    items: seq[int]
   
 proc len(pack: Pack) : int = 
   pack.rows.len()
 proc `[]`(pack: Pack, idx: int) : int  = 
   pack.rows[idx]
-proc add(pack: Pack, t: int)  = 
+proc add(pack: Pack, t: int) = 
   pack.rows.add(t)
-
+proc len(up: UsePack) : int = 
+  up.packs.len()
+proc `[]`(up: UsePack, idx: int) : Pack  = 
+  up.packs[idx]
+proc show(sp: ShowPack, pack: Pack): string = 
+  $pack.rows
 proc len(pack: PackWoAdd) : int = 
   pack.rows.len()
 proc `[]`(pack: PackWoAdd, idx: int) : int  = 
@@ -44,6 +57,15 @@ proc init_zf(a: Pack): Pack =
   Pack(rows: @[])
 proc init_zf(a: PackWoAdd): PackWoAdd =
   PackWoAdd(rows: @[])
+proc initSimpleIter(): SimpleIter =
+  SimpleIter(items: @[1,2,3])
+
+proc len(si: SimpleIter) : int = 
+  si.items.len()
+
+iterator items(si: SimpleIter): int =
+  for i in 0..<len(si.items):
+    yield(si.items[i])
 
 proc f(a: int, b: int): int =
   a + b
@@ -60,7 +82,10 @@ macro accept*(e: untyped): untyped =
   static: 
     assert(compiles(e))
   result = quote:
-    check(`e`)
+    if compiles(check(`e`)):
+      check(`e`)
+    else:
+      discard
 
 ## Checks that the given expression is rejected by the compiler.
 template reject*(e) =
@@ -147,9 +172,9 @@ suite "valid chains":
     check(sum_until_it_gt_2 == 10) # loop breaks when condition in index is true
 
   test "foreach change in-place":
-    var my_list = @[2,3,4]
-    my_list --> foreach(it = idx * it)
-    check(my_list == @[0,3,8])
+    var my_seq = @[2,3,4]
+    my_seq --> foreach(it = idx * it)
+    check(my_seq == @[0,3,8])
 
   test "multiple methods":
     let n = zip(a, b) -->
@@ -158,6 +183,14 @@ suite "valid chains":
       map(it * 2).
       all(it > 4)
     check(not n)
+
+  test "zip with index":
+    let n2 = zip(a, b) -->
+      map(f(it[0], it[1])).
+      filter(it mod 4 > 1).
+      map(it * 2).
+      index(it == 4)
+    check(n2 == 0)
 
   test "zip with array":
     check((zip(aArray, bArray) --> map(it[0] + it[1])) == @[2, 9, -2])
@@ -277,7 +310,6 @@ suite "valid chains":
   test "enum map":
     check((Suit --> map($it)) == @["D", "H", "S", "C"])
 
-
   test "enum filter":
     check((Suit --> filter($it == "H")) == @[Suit.hearts])
 
@@ -307,6 +339,7 @@ suite "valid chains":
     let p = Pack(rows: @[0,1,2,3])
     check((p --> filterSeq(it != 0)) == @[1,2,3]) 
     check((p --> filter(it != 0)).rows ==  @[1,2,3])
+    
   test "empty":
     let e : seq[int] = @[]
     let res : seq[int] = @[]
@@ -357,7 +390,7 @@ suite "valid chains":
     check(b --> all(abs1(items[it[0]], items[it[1]])))
 
     # the same again, but store it to a new list
-    let c = items --> 
+    let c = items -->
       combinations().
       filter(abs1(c.it[0], c.it[1])).
       map(c.idx).
@@ -415,4 +448,83 @@ suite "valid chains":
     check(gg() --> map(parseInt(it))[0] == 1)
     check(gg() --> map(parseInt(it)) --> map(1.5 * float(it))[2] == 4.5)
     check(a --> index(it == -4) + 1 == 3)
+    check(@[@[1,2], @[3,4]] --> flatten() == @[1,2,3,4])
+    check(@[11,2,7,3,4] --> combinations() --> filter(abs(c.it[1]-c.it[0]) == 1) --> map(c.idx) == @[[1,3],[3,4]])
+    check(@[1,2,3] --> map($it) --> to(list) is DoublyLinkedList[string])
   
+  test "simple iterator":
+    # the type SimpleIter is restricted 
+    # it does not define init_zf to initialize the type nor add (or append) to add elements
+    # also the `[]=` operator is missing
+    let si = initSimpleIter()
+    let si2 = initSimpleIter()
+    accept(si --> filter(it > 2) is seq[int]) 
+    accept(si --> filter(it > 2) --> to(seq) == @[3])
+    accept(si --> map($it) is seq[string]) # transformed to seq[string]
+    accept(si --> map(it) == @[1,2,3])
+
+    reject(si --> foreach(it = it * 2)) # foreach needs [] when changing elements
+    var sum = 0
+    si --> foreach(sum += it) # foreach without changing the content works however
+    check(si --> reduce(it[0] + it[1]) == sum)
+    accept(si --> fold(0, a + it) == 6)
+
+    # on the other hand when converted to list or seq (or something with []) the list can be changed
+    var d = si --> to(list)
+    d --> foreach(it = it * 2)
+    let e: DoublyLinkedList[int] = d
+    discard(e) # just check it can be assigned
+    accept(d --> to(seq) == @[2,4,6])
+
+    reject(zip(si,si2) --> map($it)) # zip also needs the [] operator
+    reject(si --> combinations() --> all(c.it[0] < c.it[1]))
+    accept(d --> combinations() --> map(c.it) --> all(it[0] < it[1]))
+
+  test "foreach rejects":
+    # changing elements in foreach will not work after the commands
+    # map, indexedMap, combinations, flatten and zip
+    # as they already create different collections
+    var my_seq = @[2,3,5,7]
+    var my_seq2 = @[1,2,3,4]
+    my_seq --> foreach(it = it + 1)
+    check(my_seq == @[3,4,6,8])
+    reject(my_seq --> map(it) --> foreach(it = it + 1))
+    reject(my_seq --> indexedMap(it) --> foreach(it[1] = it[1] + 1))
+    reject(my_seq --> combinations() --> foreach(it = it + 1))
+    reject(my_seq --> flatten() --> foreach(it = it + 1))
+    reject(zip(my_seq,my_seq2) --> foreach(it[0] = it[0] + 1))
+    check(my_seq == @[3,4,6,8])
+    discard my_seq2
+
+  test "closure parameters":
+    # x is an illegal capture - so this will be rejected
+    reject:
+      proc chkVarError(x: var seq[int], y: int): seq[int] =
+        result = x --> filter(it != y) 
+
+    proc chkVar(x: var seq[int], y: int): seq[int] =
+      let x = x # assigning x to a constant will work
+      result = x --> filter(it != y)
+
+    proc chkVarFor(x: var seq[int]) : int =
+      var sum = 0  
+      # foreach works here because it will not create an inner function 
+      # only an if true: ... expression (that will create a new context for the variables)
+      x --> foreach(sum += it) 
+      return sum
+
+    var s = @[1,2,3]
+    check(chkVar(s, 2) == @[1,3])
+    check(chkVarFor(s) == 6)
+
+  test "complex type call":
+    let sp = ShowPack()
+    let p1 = Pack(rows: @[1,2,3])
+    let p2 = Pack(rows: @[2,4,6])
+    let up = UsePack(packs: @[p1, p2])
+    accept(up --> map(sp.show(it)) is seq[string])
+    # internally asserted, but initially a compiler problem
+    reject(up --> map(sp.show(it)) --> to(list) is DoublyLinkedList[string])
+    accept(up --> map(sp.show(it)) --> to(seq) is seq[string])
+    accept(up --> map(sp.show(it)) --> to(list[string]) is DoublyLinkedList[string])
+    accept(up --> map(sp.show(it)) --> to(seq[string]) is seq[string])
