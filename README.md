@@ -361,4 +361,7 @@ MIT, Alexander Ivanov
 
 ### Contributors
 
-Substantial contributions : [Michael Schulte](https://github.com/michael72)
+Co-maintainers and authors: [Michael Schulte](https://github.com/michael72), Alexander Ivanov
+
+Creator: Alexander Ivanov
+
