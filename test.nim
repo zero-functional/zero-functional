@@ -528,3 +528,17 @@ suite "valid chains":
     accept(up --> map(sp.show(it)) --> to(seq) is seq[string])
     accept(up --> map(sp.show(it)) --> to(list[string]) is DoublyLinkedList[string])
     accept(up --> map(sp.show(it)) --> to(seq[string]) is seq[string])
+
+  test "dotExpr and function call on left side":
+    proc testfun(res: seq[int],something:bool): seq[int] = 
+      if something:
+        return res
+      return @[11]
+    check(@[0,1,2].testfun(true) --> reduce(it[0]+it[1]) == 3)
+    check(@[0,1,2].testfun(false) --> reduce(it[0]+it[1]) == 11)
+    check(testfun(@[0,1,2],true) --> reduce(it[0]+it[1]) == 3)
+    check(testfun(@[0,1,2],false) --> reduce(it[0]+it[1]) == 11)
+
+  test "slice as input":
+    check(0..<3 --> map($(it*it)) == @["0","1","4"])
+

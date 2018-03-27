@@ -202,12 +202,25 @@ proc apply(node: NimNode, path: seq[int], newNode: NimNode): NimNode =
   c[path[path.len-1]] = newNode
   result = node
 
-## Shortcut to get the ident label of a node
+## Shortcut and safe way to get the ident label of a node
 proc label(node: NimNode): string = 
   if node.kind == nnkIdent or node.kind == nnkSym:
     return $node
   return ""
 
+## Helper that gets nnkStmtList and removes a 'nil' inside it - if present.
+## The nil is used as placeholder for further added code.
+proc getStmtList(node: NimNode, removeNil = true): NimNode =
+  var child = node
+  while child.len > 0:
+    child = child.last
+    if child.kind == nnkStmtList:
+      if removeNil:
+        if child.len > 0 and child.last.kind == nnkNilLit:
+          child.del(child.len-1,1)
+      return child
+  return nil
+    
 ## Creates the result tuple for the zip operation.
 proc createZipTuple(node: NimNode): NimNode =
   var ex = ""
@@ -252,17 +265,20 @@ proc getResType(resultType: string, td: string): (NimNode, bool) {.compileTime.}
 ## Creates the function that returns the final result of all combined commands.
 ## The result type depends on map, zip or flatten calls. It may be set by the user explicitly using to(...)
 proc createAutoProc(node: NimNode, isSeq: bool, resultType: string, td: string): NimNode =
-  let resultIdent = newIdentNode("result")
   var (resType, explicitType) = getResType(resultType, td)
+  let resultIdent = newIdentNode("result")
+  let autoProc = quote:
+    (proc(): auto =
+      nil)
+  var code: NimNode = nil
 
   # set a default result in case the resType is not nil - this result will be used
   # if there is no explicit map, zip or flatten operation called
   if resType != nil:
-    result = quote:
-      (proc(): auto =
-          var res: `resType` 
-          `resultIdent` = init_zf(res)
-          nil)
+    code = quote:
+      var res: `resType` 
+      `resultIdent` = init_zf(res)
+
   # check explicitType: type was given explicitly (inclusive all template arguments) by user,
   # then we use resType directly:
   if explicitType:
@@ -333,60 +349,53 @@ proc createAutoProc(node: NimNode, isSeq: bool, resultType: string, td: string):
           handlerInit = nil
           handlerIdx = 0
           resType = parseExpr(newType)
-          result = quote:
-            (proc(): auto =
-                var res: `resType`
-                `resultIdent` = init_zf(res)
-                nil)
+          code = quote:
+            var res: `resType`
+            `resultIdent` = init_zf(res)
       
     if handlerInit != nil:
       # we have a handler(-chain): use it to map the result type
-      var q: NimNode = nil
       if resultType == nil:
-        q = quote:
-          (proc(): auto = 
-            `handlerInit`
-            `resultIdent` = init_zf(`listRef`,`handler`)
-            nil)
+        code = quote:
+          `handlerInit`
+          `resultIdent` = init_zf(`listRef`,`handler`)
       else:
         let resTypeOk = resType.repr.startswith(resultType)
         if resultType == "seq":
-          # this works with seq but unfortunately not (yet) with DoublyLinkedList 
-          q = quote:
-            (proc(): auto = 
-              `handlerInit`
-              var res: seq[iterType(`listRef`).type]
-              `resultIdent` = init_zf(res, `handler`)
-              nil)
+          # this works with seq but unfortunately not (yet) with DoublyLinkedList
+          code = quote:
+            `handlerInit`
+            var res: seq[iterType(`listRef`).type]
+            `resultIdent` = init_zf(res, `handler`)
         elif (resultType == "list" or resultType == "DoublyLinkedList") and not resTypeOk:
           assert(false, "unable to determine the output type automatically - please use list[<outputType>].") 
         elif resultType == "array" and not resTypeOk:
           assert(false, "unable to determine the output type automatically - array needs size and type parameters.")
         else:
-          q = quote:
-            (proc(): auto =
-              `handlerInit`
-              var res: `resType`
-              when compiles(init_zf(res,`handler`)):
-                `resultIdent` = init_zf(res,`handler`)
-              else:
-                static:
-                  assert(false, "unable to determine the output type automatically.")
-              nil)
-      result = q
+          code = quote:
+            `handlerInit`
+            var res: `resType`
+            when compiles(init_zf(res,`handler`)):
+              `resultIdent` = init_zf(res,`handler`)
+            else:
+              static:
+                assert(false, "unable to determine the output type automatically.")
     elif resultType == nil: # no handlerInit used
       # result type was not given and map/zip/flatten not used: 
       # use the same type as in the original list
-      result = quote:
-        (proc(): auto =
-            `resultIdent` = init_zf(`listRef`)
-            nil)        
+      code = quote:
+        `resultIdent` = init_zf(`listRef`)
+  # no sequence output:
+  # we do _not_ need to initialize the resulting list type here
   else:
-    # no sequence output:
-    # we do _not_ need to initialize the resulting list type here
-    result = quote:
-      (proc (): auto =
-        nil)
+    code = nil
+
+  let stmtInit = autoProc.getStmtList()
+  if code != nil:
+    stmtInit.add(code)
+  stmtInit.add(newNilLit())
+  result = autoProc;
+  
 
 proc mkItNode(index: int) : NimNode {.compileTime.} = 
   newIdentNode(internalIteratorName & ("$1" % $index))
@@ -400,6 +409,10 @@ proc prevItNode(ext: ExtNimNode) : NimNode {.compileTime.} =
 proc res(ext: ExtNimNode): NimNode {.compileTime.} =
   result = newIdentNode("result")
 
+## Replace the variable name `it`with the continuos iterator variable name.
+## The same goes for the accu `a`.
+## Expressions on the left side of dot `.` are not replaced - because `it`could
+## also be a member of a compund type - so `it.someMember` is replaced, `c.it` is not.   
 proc adapt(node: NimNode, iteratorIndex: int, inFold: bool): NimNode {.compileTime.} =
   case node.kind:
   of nnkIdent:
@@ -418,25 +431,13 @@ proc adapt(node: NimNode, iteratorIndex: int, inFold: bool): NimNode {.compileTi
         break # change only left side of of dotExpr 
     return node
 
+## Shortcut for `node.adapt()`
 proc adapt(ext: ExtNimNode, index=1, inFold=false): NimNode {.compileTime.} =
   result = ext.node[index].adapt(ext.index-1, inFold)
-        
+
 proc isListType(ext: ExtNimNode): bool = 
   ext.typeDescription.startswith("DoublyLinkedList") or ext.typeDescription.startswith("SinglyLinkedList")
 
-## Helper that gets nnkStmtList and removes a 'nil' inside it - if present.
-## The nil is used as placeholder for further added code.
-proc getStmtList(node: NimNode, removeNil = true): NimNode =
-  var child = node
-  while child.len > 0:
-    child = child.last
-    if child.kind == nnkStmtList:
-      if removeNil:
-        if child.len > 0 and child.last.kind == nnkNilLit:
-          child.del(child.len-1,1)
-      return child
-  return nil
-    
 ## Helper function that creates a list output if map, filter or flatten is the last command
 ## in the chain and a list is generated as output.
 proc inlineAddElem(ext: ExtNimNode, addItem: NimNode): NimNode {.compileTime.} = 
@@ -749,7 +750,7 @@ proc inlineCombinations(ext: ExtNimNode): ExtNimNode {.compileTime.} =
 ## Initial creation of the outer iterator.
 proc inlineSeq(ext: ExtNimNode): ExtNimNode {.compileTime.} =
   let itIdent = ext.itNode()
-  let node = ext.node
+  let listRef = ext.listRef
 
   if ext.isListType():
     # list iterator implemnentation
@@ -767,7 +768,7 @@ proc inlineSeq(ext: ExtNimNode): ExtNimNode {.compileTime.} =
   else:
     # usual iterator implementation
     ext.node = quote:
-      for `itIdent` in `node`:
+      for `itIdent` in `listRef`:
         nil
     
   ext.nextIndexInc = true
@@ -910,7 +911,7 @@ proc iterHandler(args: NimNode, debug: bool, td: string): NimNode {.compileTime.
   # check if 'var idx' has to be created or not - and 'idx += 1' to be added
   for arg in args:
     if arg.kind == nnkCall:
-      let label = $arg[0]
+      let label = arg[0].label
       if label == $Command.flatten:
         addIdxIncr = false
       elif label in NEEDS_INDEX_HANDLERS:
@@ -1085,13 +1086,12 @@ macro delegateArrowDbg(td: typedesc, a: untyped, b: untyped): untyped =
 ## The arrow "-->" should not be part of the left-side argument a.
 proc checkArrow(a: NimNode, b: NimNode, arrow: string): (NimNode, NimNode, bool) =
   var b = b
-
   if a.kind == nnkInfix:
     let ar = a.repr
     let idx = ar.find(arrow)
     if idx != -1:
       # also replace the arrows with "."
-      let debug = ar[idx+arrow.len] == '>' # for some exprssion the debug arrow -->> is parsed as --> + >
+      let debug = ar[idx+arrow.len] == '>' # debug arrow -->> is used
       let add = if debug: 1 else: 0
       let br = (ar[idx+arrow.len+add..ar.len-1] & "." & b.repr).replace(arrow, ".")
       return (parseExpr(ar[0..idx-1]), parseExpr(br), debug)
