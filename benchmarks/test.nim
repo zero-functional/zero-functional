@@ -2,12 +2,8 @@ import zero_functional, strutils, sequtils, bench, times, os
 
 var data = readFile("data.txt")
 
-var a = data.split(" ").mapIt(parseInt(it))
-
-var b: seq[int] = @[]
-for z in 0..<2_000_000:
-  b.add(z)
-
+let a = data.split(" ") --> map(parseInt(it)) --> to(seq[int])
+let b = (0..<2_000_000) --> to(seq[int])
 
 proc f(a: int, b: int): int =
   a + b
@@ -40,3 +36,4 @@ benchmark "example1":
   hack = example1()
 
 echo hack
+
