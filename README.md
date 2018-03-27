@@ -130,7 +130,7 @@ proc init_zf(a: MyType): MyType =
  
 ## Supported methods
 
-Those are not exactly the functions from sequtils, they have the some naming and almost the same behavior
+These are not exactly the functions from sequtils, they have the same naming and almost the same behavior
 
 The macro works `-->` or `connect`. Multiple `-->` may be used or `.`.
 
@@ -249,15 +249,15 @@ var n = a --> reduce(it[0] + it[1])
 ### foreach
 
 Can only be used with functions that have side effects.
-When last command in the chain the result is void. 
-As in-between element, the code is simply executed on each element.
+When used ad last command in the chain the result is void. 
+As in-between element the code is simply executed on each element.
 
 #### changing in-place
-The iterator content may be changed in foreach resulting in changing
+The iterator content may be changed in `foreach` resulting in changing
 the original collection.
-However there are a few restrictions (see test.nim):
+However there are a few restrictions (see test.nim](test.nim#L455)):
 + the `[]=` operator has to be available for the underlying collection type (exception: the std LinkedList types)
-+ functions, that alter the collection elements may not be used in the chain before (e.g. `map` is not allowed, but `filter` is).
++ functions that alter the collection elements may not be used in the chain before (e.g. `map` is not allowed, but `filter` is).
 
 ```nim
 @[1,2,3] --> 
@@ -291,12 +291,12 @@ check(@[11,2,7,3,4] --> combinations() --> filter(abs(c.it[1]-c.it[0]) == 1) -->
 ### to
 
 Finally it is possible to force the result type to the type given in `to` - which is only allowed as last argument when generating 
-collection results (e.g. `map` or `filter` are last arguments before `to`).
-This method is handled differently from the others and removed internally so the command before `to` is the actual last argument. 
+collection results (e.g. `map` or `filter` are the last arguments before `to`).
+This method is handled differently from the others and removed internally so the command before `to` is the actual last command. 
 
 When the result type is given as `seq`, `array` or `list` (the latter is mapped to `DoublyLinkedList`) then the template argument
 can be determined automatically.
-However when all auto-detection fails, the result type may be given explicitly here - the resulting code is also a bit more efficient.
+However when all auto detection fails, the result type may be given explicitly here - the resulting code is also a bit more efficient.
 
 ```nim
 check([1,2,3]) --> to(seq) == @[1,2,3])
@@ -307,10 +307,10 @@ echo(l2)
 
 ## Overview Table
 
-Result type depends on the function used as last parameter.
+The result type depends on the function used as last parameter.
 
 | Command       | 1st Param | in-between | Last Param | Result Type                 |
-| ------------- | --------- | ---------- | ---------- | --------------------------- | 
+| ------------- | --------- | ---------- | ---------- | --------------------------- |
 |all            |           |            |     +      | bool                        |
 |combinations   |   +       |            |            | map(it): coll[Combination]  |
 |exists         |           |            |     +      | bool                        |
@@ -336,9 +336,9 @@ Result type depends on the function used as last parameter.
 ## Debugging using `-->>`
 
 As `zero_functional` is still work in progress and macros are still kind of experimental in Nim, it can happen, that the compiler
-crashes or that actual compile errors are reported in a not understandable way. To see the actual code that is generated (provided the generation itself doe not crash)
+crashes or that compile errors are hard to understand. To see the actual code that is generated (provided the generation itself does not crash)
 you can use the `-->>` operator which prints the representation `repr` of the actual generated nim code.
-It is also useful for checking what the expression is actually generating under the hood.
+It is also useful for checking what the expression is generating under the hood.
 
 ```nim
 let a = [1,2,3]
