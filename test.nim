@@ -350,7 +350,9 @@ suite "valid chains":
 
   test "flatten":
     let f = @[@[1,2,3],@[4,5],@[6]]
-    check((f --> flatten()) == @[1,2,3,4,5,6])
+    check(f --> flatten() == @[1,2,3,4,5,6])
+    let f2 = @[@["1","2","3"],@["4","5"],@["6"]]
+    check((f2 --> flatten()) == @["1","2","3","4","5","6"])
 
   test "flatten sum":
     check((@[a,b] --> flatten() --> fold(0, a + it)) == 9)
@@ -480,6 +482,19 @@ suite "valid chains":
     reject(si --> combinations() --> all(c.it[0] < c.it[1]))
     accept(d --> combinations() --> map(c.it) --> all(it[0] < it[1]))
 
+  test "zip with simpleIter":
+    let si = initSimpleIter()
+    check(zip(si, a) --> map(it[0]+it[1]) == @[3,10,-1]) # si as left argument works - because it is being iterated
+    reject(zip(a,si) --> map(it)) # si needs `[]` and high - we do that now...
+    proc `[]`(si: SimpleIter, idx: int) : int = si.items[idx]
+    proc `high`(si: SimpleIter) : int = si.items.high()
+    check(zip(a,si) --> map(it[0]+it[1]) == @[3,10,-1])
+    # when zipping with a shorter list, the result should also be a shorter list (that is where `high` is used)
+    check(zip(@[3,2],si) --> map(it[0]+it[1]) == @[4,4])
+    # same for a longer list
+    check(zip([3,2,1,0],si) --> map(it[0]+it[1]) == @[4,4,4])
+    
+
   test "foreach rejects":
     # changing elements in foreach will not work after the commands
     # map, indexedMap, combinations, flatten and zip
@@ -542,3 +557,30 @@ suite "valid chains":
   test "slice as input":
     check(0..<3 --> map($(it*it)) == @["0","1","4"])
 
+  test "zip as first and in-between command":
+    # there are a few combinations for zip, map and filter
+    let a1 = @[1,-2,3,-4,5]
+    let a2 = @[1,4,-2,-3,6]
+    # first zip, then multiply with each other @[1,-8,6,-12,30], then filter > 0, then sum up
+    check(zip(a1,a2) --> map(it[0]*it[1]) --> filter(it > 0) --> fold(0, a + it)         == 43)
+    # internally zip(a1,a2) --> ... is already translated to a1 --> map(it,a2[idx]) which is the same as  
+    check(a1 --> zip(it, a2) --> map(it[0]*it[1]) --> filter(it > 0) --> fold(0, a + it) == 43)
+    # this is not the same - filtering the input seq for positive values only
+    check(a1 --> filter(it > 0) --> zip(it,a2) --> map(it[0]*it[1]) --> fold(0, a + it)  == 25)
+    
+    # the right hand side of zip is more flexible - you could also use expressions with `it`:
+    check(a1 --> filter(it > 0).
+                zip(-1*it, a2).
+                map(it[0]*it[1]).
+                fold(0, a+it) == -25)
+  
+  test "subcommands of reduce":
+    let arr = [3,11,2,9,1,8,7]
+    # find (idx,min) value
+    check(arr --> minIdx() == (4,1))  
+    check(arr --> sum() == 41)
+    check(arr --> filter(it < 10) --> max() == 9)
+    check(arr --> filter(it < 7) --> maxIdx() == (0,3))
+    # sumIdx does not make much sense - here the index of the last added element 8 is 5, the sum is 28 
+    check(arr --> filter(it > 7) --> sumIdx()  == (5,28))
+    check(arr --> filter(it > 7) --> product() == 792)

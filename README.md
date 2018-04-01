@@ -180,7 +180,14 @@ check(x == @[2])
 
 ### zip
 
-`zip` can only be used at the beginning of the command chain and it can work with n sequences
+`zip` can work with n sequences. `zip` is (roughly) internally translated to:
+```nim
+# zip(a,b,c) --> ...
+let minHigh = min([b.high(), c.high()])
+a --> filter(idx <= minHigh) --> map((it, b[idx], c[idx])) --> ...
+```
+So for zip in order to work properly at least the 2nd and following parameters have to support access with `[]` and the `high` procedure.
+If those procedures are not available the macro tries to call the procedure `mkIndexable` on that parameter. Using this helper the parameter can be wrapped with a new type that supports `[]` and `high`.
 
 ### exists
 
@@ -239,11 +246,32 @@ var n = zip(a, b) --> map(it[0] + it[1]) --> fold(0, a + it)
 
 Same as fold, but with the iterator converted to a tuple where
 `it[0]` is the current result and `it[1]` the actual iterator on the collection.
-Also the first item of the collection is used as initial value - the other items
-are then accumulated to it.
+The first item of the collection is used as initial value - the other items
+are then accumulated to it. This also useful when a type does not define the neutral element for the given operation. E.g. for integers and `+` the neutral element is 0 but for user defined types the neutral element might not exist.
 
 ```nim
 var n = a --> reduce(it[0] + it[1])
+```
+
+There are a few commands that are simply mapped to reduce 
+
+#### max
+Return the maximum value in the collection (`>` is needed)
+#### min
+Return the minimum value in the collection (`<` is needed)
+#### product
+Return the product of the (filtered) elements (`*`)
+#### sum
+Return the sum of the (filtered) elements (`+`).
+
+### reduceIdx
+
+By adding the `Idx` suffix to `reduce` or to the reduce commands above, the index of the last value that was used for the `result` and the actual result of the operation are returned.
+For `sum` and `product` this is not actually helpful but it can be used to find the indices of the `min` and `max` elements.
+
+```nim
+check(@[11,2,0,-2,1,3,-1] --> minIdx() == (3,-2))
+check(@[11,2,0,-2,1,3,-1] --> maxIdx() == (11,0))
 ```
 
 ### foreach
@@ -324,7 +352,7 @@ The result type depends on the function used as last parameter.
 |map            |   +       |     +      |     +      | collType[*]                 |
 |reduce         |           |            |     +      | *                           |
 |sub            |   +       |     +      |     +      | part coll / zeroed array    |
-|zip            |   +       |            |            | map(it): seq[(*,..,*)]      |
+|zip            |   +       |     +      |            | map(it): seq[(*,..,*)]      |
 |to             |           |            |   virtual  | given type                  |
 
 + *: any type depending on given function parameters

@@ -1,4 +1,4 @@
-import sequtils, macros, options, sets, lists, typetraits, strutils
+import macros, options, sets, lists, typetraits, strutils
 
 const iteratorVariableName = "it"
 const accuVariableName = "a"
@@ -9,6 +9,7 @@ const internalIteratorName = "__" & iteratorVariableName & "__"
 const useInternalAccu = accuVariableName != "result"
 const internalAccuName = if (useInternalAccu): "__" & accuVariableName & "__" else: "result"
 const implicitTypeSuffix = "?" # used when result type is automatically determined
+const defaultResultType = "seq[int]" & implicitTypeSuffix
 const listIteratorName = "__itlist__"
 const listIteratorInnerName = "__itlist2__"
 
@@ -17,7 +18,11 @@ type
   Command {.pure.} = enum
     ## All available commands.
     ## 'to' - is a virtual command
-    all, combinations, exists, filter, find, flatten, fold, foreach, index, indexedMap, map, reduce, sub, zip, to
+    all, combinations, exists, filter, find, flatten, fold, foreach, index, indexedMap, map, reduce, reduceIdx, sub, zip, to
+
+  ReduceCommand {.pure.} = enum
+    ## additional commands that operate as reduce command
+    max, min, product, sum, 
 
   ExtNimNode = ref object ## Store additional info the current NimNode used in the inline... functions
     node: NimNode     ## the current working node / the current function
@@ -72,19 +77,28 @@ type
 static: # need to use var to be able to concat
   let PARAMETERLESS_CALLS = [$Command.flatten, $Command.combinations].toSet
   let FORCE_SEQ_HANDLERS = [$Command.indexedMap, $Command.flatten, $Command.zip].toSet
-  let NEEDS_INDEX_HANDLERS = [$Command.indexedMap, $Command.index, $Command.flatten, $Command.sub, $Command.index, $Command.combinations].toSet
+  let NEEDS_INDEX_HANDLERS = [$Command.indexedMap, $Command.index, $Command.flatten, $Command.reduceIdx, $Command.sub, $Command.index, $Command.combinations].toSet
   let CANNOT_BE_ALTERED_HANDLERS = [Command.map, Command.indexedMap, Command.combinations, Command.flatten, Command.zip].toSet
   var SEQUENCE_HANDLERS = [$Command.map, $Command.filter, $Command.sub, $Command.combinations].toSet
   var HANDLERS = [$Command.exists, $Command.all, $Command.index, $Command.fold, $Command.reduce, $Command.foreach, $Command.find].toSet
   SEQUENCE_HANDLERS.incl(FORCE_SEQ_HANDLERS)
   HANDLERS.incl(SEQUENCE_HANDLERS)
 
-## Converts the id-string to the given command.
-proc toCommand(key: string): Option[Command] =
-  for it in Command:
+## Converts the id-string to the given enum type.
+proc toEnum[T:typedesc[enum]](key: string; t:T): auto =
+  result = none(t)
+  for it in t:
     if $it == key:
-      return some(it)
-  return none(Command)
+      result = some(it)
+      break
+
+## Converts the id-string to its Command counterpart.
+proc toCommand(key: string): Option[Command] =
+  key.toEnum(Command)
+
+## Converts the id-string to its ReduceCommand counterpart.
+proc toReduceCommand(key: string): Option[ReduceCommand] =
+  key.toEnum(ReduceCommand)
 
 proc zf_fail(msg: string) {.compileTime.} =
   assert(false, ": " & msg)
@@ -158,6 +172,12 @@ proc addItemZf*[T](a: var Appendable[T], idx: int, item: T) =
 proc iterType[T](items: Iterable[T]): T = 
   discard
 
+## Shortcut and safe way to get the ident label of a node
+proc label(node: NimNode): string = 
+  if node.kind == nnkIdent or node.kind == nnkSym:
+    return $node
+  return ""
+
 ## Replace the given identifier by the string expression
 proc replace(node: NimNode, searchNode: NimNode, replNode: NimNode): NimNode =
   result = node
@@ -202,12 +222,6 @@ proc apply(node: NimNode, path: seq[int], newNode: NimNode): NimNode =
   c[path[path.len-1]] = newNode
   result = node
 
-## Shortcut and safe way to get the ident label of a node
-proc label(node: NimNode): string = 
-  if node.kind == nnkIdent or node.kind == nnkSym:
-    return $node
-  return ""
-
 ## Helper that gets nnkStmtList and removes a 'nil' inside it - if present.
 ## The nil is used as placeholder for further added code.
 proc getStmtList(node: NimNode, removeNil = true): NimNode =
@@ -221,15 +235,6 @@ proc getStmtList(node: NimNode, removeNil = true): NimNode =
       return child
   return nil
     
-## Creates the result tuple for the zip operation.
-proc createZipTuple(node: NimNode): NimNode =
-  var ex = ""
-  for i in 1..<node.len:
-    if ex.len > 0:
-      ex &= ","
-    ex &= node[i].repr & "[0]"
-  ex = "(" & ex & ")"
-  result = parseExpr(ex)
 
 ## Gets the result type, depending on the input-result type and the type-description of the input type.
 ## When the result type was given explicitly by the user that type is used.
@@ -296,12 +301,20 @@ proc createAutoProc(node: NimNode, isSeq: bool, resultType: string, td: string):
     # the "handler" is the default mapping ``it`` to ``it`` (if "map" is not used)
     var handlerInit : NimNode = nil
 
+    var hasCombination = false
     for child in node:
       if child.len > 0:
         let label = child[0].repr
-        if label == $Command.map or label == $Command.indexedMap:
-          let isIndexed = label == $Command.indexedMap
-          var params = child[1].copyNimTree() # params of the map command
+        let isIndexed = label == $Command.indexedMap
+        let isFlatten = label == $Command.flatten
+        if label == $Command.combinations: 
+          hasCombination = true
+        elif label == $Command.map or isIndexed or isFlatten: # zip is part of map and will not be checked
+          var params : NimNode = 
+            if isFlatten:
+              nnkStmtList.newTree().add(newIdentNode(iteratorVariableName))
+            else:
+              child[1].copyNimTree() # params of the map command
           # use / overwrite the last mapping to get the final result type
           let prevHandler = "handler" & $handlerIdx 
           handlerIdx += 1
@@ -311,47 +324,28 @@ proc createAutoProc(node: NimNode, isSeq: bool, resultType: string, td: string):
           else:
             # call previous handler for each iterator instance
             params = params.replace(itIdent, parseExpr(prevHandler & "(" & iteratorVariableName & ")"))
-          let q = quote:
+          let handlerCall = quote:
             proc `handler`(`itIdent`: auto): auto =
-              var `idxIdent` = 0  # could be used as map param
-              var `comboNode` = createCombination([0,0],[0,0]) # could be used as map param
-              when `isIndexed`:
-                `resultIdent` = (0,`params`)
-              else:
-                `resultIdent` = `params`
-              discard `idxIdent`
-              discard `comboNode`
-          handlerInit.add(q)
-
-        elif label == $Command.zip:
-          # zip(a,b,c) => params = (a[0],b[0],c[0])
-          let params = createZipTuple(child.copyNimTree())
-          handlerIdx += 1
-          handler = newIdentNode("handler" & $handlerIdx)
-          let q = quote:
-            proc `handler`(`itIdent`: auto): auto =
-              `params`
-          handlerInit = nnkStmtList.newTree().add(q)
-
-        elif label == $Command.flatten and resultType != nil:
-          # try to find the resulting type of the flatten operation
-          # e.g. list[array[2,int]] --> flatten() => list[int]
-          let actualType = resType.repr
-          var innerType = "int"
-          if actualType.endswith("]]"):
-            var idx = actualType.rfind("[")
-            innerType = actualType[idx+1..actualType.len-3]
-            idx = innerType.rfind(", ")
-            if idx != -1:
-              innerType = innerType[idx+2..innerType.len-1]
-          let idx = actualType.find('[')
-          let newType = actualType[0..idx-1] & "[" & innerType & "]" 
-          handlerInit = nil
-          handlerIdx = 0
-          resType = parseExpr(newType)
-          code = quote:
-            var res: `resType`
-            `resultIdent` = init_zf(res)
+              nil
+          let q = 
+            if isFlatten:
+              quote:
+                for it in `params`:
+                  return it
+            else:
+              quote:
+                var `idxIdent` = 0  # could be used as map param
+                when `hasCombination`:
+                  var `comboNode` = createCombination([0,0],[0,0]) # could be used as map param
+                when `isIndexed`:
+                  `resultIdent` = (0,`params`)
+                else:
+                  `resultIdent` = `params`
+                discard `idxIdent`
+                when `hasCombination`:
+                  discard `comboNode`
+          handlerCall.getStmtList().add(q)
+          handlerInit.add(handlerCall)
       
     if handlerInit != nil:
       # we have a handler(-chain): use it to map the result type
@@ -361,7 +355,7 @@ proc createAutoProc(node: NimNode, isSeq: bool, resultType: string, td: string):
           `resultIdent` = init_zf(`listRef`,`handler`)
       else:
         let resTypeOk = resType.repr.startswith(resultType)
-        if resultType == "seq":
+        if resultType == "seq" or resultType == defaultResultType:
           # this works with seq but unfortunately not (yet) with DoublyLinkedList
           code = quote:
             `handlerInit`
@@ -396,7 +390,6 @@ proc createAutoProc(node: NimNode, isSeq: bool, resultType: string, td: string):
   stmtInit.add(newNilLit())
   result = autoProc;
   
-
 proc mkItNode(index: int) : NimNode {.compileTime.} = 
   newIdentNode(internalIteratorName & ("$1" % $index))
 
@@ -413,7 +406,7 @@ proc res(ext: ExtNimNode): NimNode {.compileTime.} =
 ## The same goes for the accu `a`.
 ## Expressions on the left side of dot `.` are not replaced - because `it`could
 ## also be a member of a compund type - so `it.someMember` is replaced, `c.it` is not.   
-proc adapt(node: NimNode, iteratorIndex: int, inFold: bool): NimNode {.compileTime.} =
+proc adapt(node: NimNode, iteratorIndex: int, inFold: bool=false): NimNode {.compileTime.} =
   case node.kind:
   of nnkIdent:
     if $node == iteratorVariableName:
@@ -456,27 +449,6 @@ proc inlineAddElem(ext: ExtNimNode, addItem: NimNode): NimNode {.compileTime.} =
         else:
           zf_fail("Result type '" & `resultType` & "' and added item of type '" & $`addItem`.type & "' do not match!")
 
-## Implementation of the 'zip' command.
-## A list of tuples or tuple-iterators are created.
-proc inlineZip(ext: ExtNimNode): ExtNimNode {.compileTime.} =
-  let itIdent = ext.itNode()
-  let idxIdentZip = newIdentNode("idxZip")
-  let m = nnkCall.newTree(newIdentNode("min"), nnkBracket.newTree())
-  let p = nnkPar.newTree()
-  var z = 0
-  for arg in ext.node:
-    if z > 0:
-      m.last.add(nnkCall.newTree(newIdentNode("high"), arg))
-      p.add(nnkBracketExpr.newTree(arg, idxIdentZip))
-    z += 1
-  ext.node = quote:
-    let minHigh = `m`
-    for `idxIdentZip` in 0..minHigh:
-      let `itIdent` = `p`
-      nil
-  ext.nextIndexInc = true
-  result = ext
-          
 ## Implementation of the 'map' command.
 ## Each element of the input is mapped to a given function.
 proc inlineMap(ext: ExtNimNode, indexed: bool = false): ExtNimNode {.compileTime.} =
@@ -521,18 +493,19 @@ proc inlineFlatten(ext: ExtNimNode): ExtNimNode {.compileTime} =
   let itIdent = ext.itNode()
   let itPrevIdent = ext.prevItNode()
   let idxIdent = newIdentNode(indexVariableName)
-  ext.needsIndex = true
-  if not ext.isLastItem:
-    ext.node = quote:
-      for `itIdent` in `itPrevIdent`:
-        `idxIdent` += 1
-        nil
-  else:
-    let push = ext.inlineAddElem(itIdent)
-    ext.node = quote:
-      for `itIdent` in `itPrevIdent`:
-        `push`
-        `idxIdent` += 1
+  let idxFlatten = newIdentNode("idxFlatten")
+  let i = quote:
+    var `idxFlatten` = -1
+  ext.initials.add(i)
+
+  let isLast = ext.isLastItem
+  let push = if isLast: ext.inlineAddElem(itIdent) else: nil
+  ext.node = quote:
+    for `itIdent` in `itPrevIdent`:
+      `idxFlatten` += 1
+      when `isLast`:
+        let `idxIdent` = `idxFlatten` # overwrite the outer value locally
+      `push` # push might need idxIdent (at least for array items)
   ext.nextIndexInc = true
   result = ext
 
@@ -699,6 +672,29 @@ proc inlineReduce(ext: ExtNimNode): ExtNimNode {.compileTime.} =
   let prevIdent = ext.prevItNode()
   let itIdent = ext.itNode() 
   ext.index += 1
+  var label = ext.node[0].label
+  let index = label.endswith("Idx")
+  if index:
+    label = label[0..label.len-4]
+    ext.needsIndex = true
+  let reduceCmd = label.toReduceCommand()
+  if reduceCmd != none(ReduceCommand):
+    # e.g. sum <=> reduce(sum(it))
+    let operation = 
+      case reduceCmd.get():
+      of ReduceCommand.max:
+        quote:
+          if `itIdent`[0] > `itIdent`[1]: `itIdent`[0] else: `itIdent`[1]
+      of ReduceCommand.min:
+        quote:
+          if `itIdent`[0] < `itIdent`[1]: `itIdent`[0] else: `itIdent`[1] 
+      of ReduceCommand.product:
+        quote:
+          `itIdent`[0] * `itIdent`[1]
+      of ReduceCommand.sum:
+        quote:
+          `itIdent`[0] + `itIdent`[1]
+    ext.node.add(operation)  
   let adaptedExpression = ext.adapt()
   let initAccu = newIdentNode("initAccu")
   let resultIdent = ext.res()
@@ -706,13 +702,27 @@ proc inlineReduce(ext: ExtNimNode): ExtNimNode {.compileTime.} =
     var `initAccu` = true
   ext.initials.add(i)
   
-  ext.node = quote:
-    if `initAccu`:
-      `resultIdent` = `prevIdent`
-      `initAccu` = false
-    else:
-      let `itIdent` = (`resultIdent`, `prevIdent`)
-      `resultIdent` = `adaptedExpression`
+  if index:
+    let idxIdent = newIdentNode(indexVariableName)
+    # return tuple(idx, accu)
+    ext.node = quote:
+      if `initAccu`:
+        `resultIdent` = (`idxIdent`, `prevIdent`)
+        `initAccu` = false
+      else:
+        let oldValue = `resultIdent`[1]
+        let `itIdent` = (oldValue, `prevIdent`)
+        let newValue = `adaptedExpression`
+        if not (oldValue == newValue): 
+          `resultIdent` = (`idxIdent`, newValue)
+  else:
+    ext.node = quote:
+      if `initAccu`:
+        `resultIdent` = `prevIdent`
+        `initAccu` = false
+      else:
+        let `itIdent` = (`resultIdent`, `prevIdent`)
+        `resultIdent` = `adaptedExpression`
   ext.nextIndexInc = true
   result = ext
 
@@ -792,17 +802,16 @@ proc ensureParameters(ext: ExtNimNode, no: int) {.compileTime.} =
         
 ## Delegates each function argument to the inline implementations of each command.
 proc inlineElement(ext: ExtNimNode): ExtNimNode {.compileTime.} =
-  let label = if (ext.node.len > 0 and ext.node[0].kind == nnkIdent): $ext.node[0] else: ""
+  let label = if (ext.node.len > 0): ext.node[0].label else: ""
   if ext.node.kind == nnkCall and (ext.index > 0 or label in HANDLERS):
-    if not (label in PARAMETERLESS_CALLS):    
-      ext.ensureParameters(1)
-    let cmdCheck = label.toCommand
+    let cmdCheck = label.toCommand()
     if none(Command) != cmdCheck:
       let cmd = cmdCheck.get()
+      if not (label in PARAMETERLESS_CALLS):    
+        ext.ensureParameters(1)
       case cmd:
       of Command.zip:
-        ext.ensureFirst()
-        return ext.inlineZip()
+        assert(false, "'zip' should already have been transformed to 'map'")
       of Command.map:
         return ext.inlineMap()
       of Command.filter:
@@ -828,6 +837,9 @@ proc inlineElement(ext: ExtNimNode): ExtNimNode {.compileTime.} =
       of Command.reduce:
         ext.ensureLast()
         return ext.inlineReduce()
+      of Command.reduceIdx:
+        ext.ensureLast()
+        return ext.inlineReduce()
       of Command.foreach:
         return ext.inlineForeach()
       of Command.sub:
@@ -843,12 +855,111 @@ proc inlineElement(ext: ExtNimNode): ExtNimNode {.compileTime.} =
       if "any" == label:
         warning("any is deprecated - use exists instead")
         return ext.inlineExists()
+      elif (label.toReduceCommand() != none(ReduceCommand)) or (label.endswith("Idx") and label[0..label.len-4].toReduceCommand() != none(ReduceCommand)):
+        ext.ensureLast()
+        return ext.inlineReduce()
       else:
         error("$1 is unknown" % label, ext.node)
   else:
     ext.ensureFirst()
     return ext.inlineSeq()
 
+type
+  ## Helper type to allow `[]` access for SomeLinkedList types
+  MkListIndexable[T,U,V] = ref object
+    listRef: U
+    currentIt: V
+    currentIdx: Natural
+    length: int
+  StopIteration* = object of Exception
+  
+  ## Helper to allow `[]` access for slices
+  MkSliceIndexable[T] = ref object
+    slice: HSlice[T,T]  
+
+proc mkIndexable*[T](items: DoublyLinkedList[T]): MkListIndexable[T, DoublyLinkedList[T], DoublyLinkedNode[T]] =
+  MkListIndexable[T, DoublyLinkedList[T], DoublyLinkedNode[T]](listRef: items, currentIt: items.head, currentIdx: 0, length: -1)
+proc mkIndexable*[T](items: SinglyLinkedList[T]): MkListIndexable[T, SinglyLinkedList[T], SinglyLinkedNode[T]] =
+  MkListIndexable[T, SinglyLinkedList[T], SinglyLinkedNode[T]](listRef: items, currentIt: items.head, currentIdx: 0, length: -1)
+proc mkIndexable*[T](items: HSlice[T,T]): MkSliceIndexable[T] = 
+  MkSliceIndexable[T](slice: items)
+
+proc `[]`*[T,U,V] (items: var MkListIndexable[T,U,V], idx: Natural): T =
+  while idx != items.currentIdx and items.currentIt != nil:
+    items.currentIt = items.currentIt.next
+    items.currentIdx += 1
+  if items.currentIt == nil:
+    raise newException(StopIteration, "index too large!")
+  items.currentIdx += 1
+  let value = items.currentIt.value
+  items.currentIt = items.currentIt.next
+  result = value
+
+proc high*(items: MkListIndexable): int =
+  # high = is broken down to number of items - 1
+  # so that low would be mapped to 0
+  if items.length == -1:
+    for it in items.listRef:
+      items.length += 1 
+  return items.length
+
+proc `[]`*[T] (items: MkSliceIndexable[T], idx: Natural): T =
+  items.slice.a + T(idx)
+
+proc high*(items: MkSliceIndexable): int =
+  int(items.slice.b - items.slice.a)
+
+## Wraps the given node with `mkIndexable` when the node type does not support access with `[]`
+proc wrapIndexable(a: NimNode): NimNode {.compileTime.} =
+  let q = quote:
+    when not compiles(`a`[0]) or not compiles(high(`a`)):
+      when not compiles(mkIndexable(`a`)):
+        static:
+          assert(false, "need to provide an own implementation for mkIndexable(" & $`a`.type & ")")
+      else:
+        var `a` = mkIndexable(`a`)
+  result = q
+
+## Replaces zip(a,b,c) --> ... with something like
+## a --> filter(idx <= min([b.high(),c.high()]) --> map(it,b[idx],c[idx])
+## Types that do not support `high` and `[]` have to implement the function
+## `mkIndexable`(`MyType`) returning a type that supports both functions.
+## This should be done, when the type cannot simply be mapped to `[]` and `high` -
+## see `MkListIndexable`.
+proc replaceZip(args: NimNode) : NimNode {.compileTime.} =
+  var idx = 0
+  result = nnkStmtList.newTree()
+
+  for arg in args:
+    # search for all zip calls and replace them with filter --> map
+    if arg.kind == nnkCall and arg[0].label == $Command.zip:
+      let zipCmd = arg.copyNimTree()
+      let highList = nnkBracket.newTree()
+      let params = newPar()
+      if idx == 0:
+        params.add(newIdentNode(iteratorVariableName)) # map(it)
+      for paramIdx in params.len+1..<zipCmd.len:
+        let p = zipCmd[paramIdx]
+        if p.kind != nnkInfix and p.kind != nnkBracketExpr and p.label != iteratorVariableName:
+          result.add(p.wrapIndexable())
+          highList.add(nnkCall.newTree(newIdentNode("high"), p))
+          params.add(nnkBracketExpr.newTree(p, newIdentNode(indexVariableName))) # map(it,b[idx],...)
+        else:
+          params.add(p)
+      if idx == 0:
+        # set the first arg of zip as the first arg in the chain (e.g. moving `a` to the left of `-->`)
+        args.insert(0, zipCmd[1]) # a --> ...
+        idx = 1
+      if highList.len > 0:
+        let minHigh = genSym(nskLet, "__minHigh__")
+        let i = quote:
+          let `minHigh`= min(`highList`)
+        result.add(i)
+        let filterCmd = newCall($Command.filter, infix(newIdentNode(indexVariableName), "<=", minHigh))  
+        args.insert(idx, filterCmd) # insert the check for the indices before the map
+        idx += 1
+      args[idx] = newCall($Command.map, params)
+    idx += 1
 
 ## Check if the "to" parameter is used to generate a specific result type.
 ## The requested result type is returned and the "to"-node is removed.
@@ -890,18 +1001,18 @@ proc checkTo(args: NimNode, td: string): string {.compileTime.} =
               elif (td.startswith("DoublyLinkedList")):
                 td & implicitTypeSuffix
               else:
-                "seq[int]" & implicitTypeSuffix # default to sequence - and use it if isSeq is used explicitly
+                defaultResultType # default to sequence - and use it if isSeq is used explicitly
   if resultType == nil and td == "enum":
     resultType = "seq[" & $args[0] & "]" & implicitTypeSuffix
   result = resultType
 
 ## Main function that creates the outer function call.
 proc iterHandler(args: NimNode, debug: bool, td: string): NimNode {.compileTime.} =
-  let resultType = args.checkTo(td)
-  let lastCall = $args.last[0]
+  let resultType = args.checkTo(td) 
+  let preInit = args.replaceZip() # zip is replaced with map + filter
+  let lastCall = args.last[0].label
   let isSeq = lastCall in SEQUENCE_HANDLERS
   var defineIdxVar = true
-  var addIdxIncr = true
 
   if defineIdxVar:
     if not isSeq or not (resultType != nil and resultType.startswith("array") or (resultType == nil and td.startswith("array"))): 
@@ -912,25 +1023,23 @@ proc iterHandler(args: NimNode, debug: bool, td: string): NimNode {.compileTime.
   for arg in args:
     if arg.kind == nnkCall:
       let label = arg[0].label
-      if label == $Command.flatten:
-        addIdxIncr = false
-      elif label in NEEDS_INDEX_HANDLERS:
+      if label in NEEDS_INDEX_HANDLERS:
         defineIdxVar = true
 
   var code: NimNode
   let needsFunction = (lastCall != $Command.foreach)
   if needsFunction:
-    result = args.createAutoProc(isSeq, resultType, td)
-    code = result.last.getStmtList()
+    result = preInit.add(args.createAutoProc(isSeq, resultType, td))
+    code = result.last.getStmtList()    
     result = nnkCall.newTree(result)
   else:
     # there is no extra function, but at least we have an own section here - preventing double definitions
     var q = quote:
       if true:
+        `preInit`
         nil
-    code = q.getStmtList()
     result = q
-
+    code = q.getStmtList()
   var init = code
   let initials = nnkStmtList.newTree()
   let varDef = nnkStmtList.newTree()
@@ -941,6 +1050,7 @@ proc iterHandler(args: NimNode, debug: bool, td: string): NimNode {.compileTime.
   let listRef = args[0]
   let finals = nnkStmtList.newTree()
   let endLoop = nnkStmtList.newTree()
+  var startNode: NimNode = nil
 
   var commands: seq[Command] = @[]
   for arg in args:
@@ -948,7 +1058,7 @@ proc iterHandler(args: NimNode, debug: bool, td: string): NimNode {.compileTime.
     
     if arg.kind == nnkCall:
       let label = arg[0].label
-      let cmdCheck = label.toCommand
+      let cmdCheck = label.toCommand()
       if none(Command) != cmdCheck:
         commands.add(cmdCheck.get())
 
@@ -966,6 +1076,8 @@ proc iterHandler(args: NimNode, debug: bool, td: string): NimNode {.compileTime.
                       nextIndexInc: false).inlineElement()
     let newCode = ext.node.getStmtList()
     code.add(ext.node)
+    if startNode == nil:
+      startNode = ext.node
     if newCode != nil:
       code = newCode
     if not defineIdxVar:
@@ -983,13 +1095,13 @@ proc iterHandler(args: NimNode, debug: bool, td: string): NimNode {.compileTime.
     init.add(finals)  
     
   # could be combinations of for and while, but only one while (for DoublyLinkedList) -> search while first
-  var loopNode = result.findNode(nnkWhileStmt) 
+  var loopNode = startNode.findNode(nnkWhileStmt) 
   if loopNode == nil:
-    loopNode = result.findNode(nnkForStmt)
+    loopNode = startNode.findNode(nnkForStmt)
   if endLoop.len > 0:
     loopNode.last.add(endLoop)
 
-  if defineIdxVar and addIdxIncr and loopNode != nil:
+  if defineIdxVar and loopNode != nil:
     # add index increment to end of the for loop
     let idxIdent = newIdentNode(indexVariableName)
     let incrIdx = quote:
@@ -1049,28 +1161,26 @@ proc delegateMacro(a: NimNode, b1:NimNode, debug: bool, td: string): NimNode =
 
   # now re-arrange all dot expressions to one big parameter call
   # i.e. a --> filter(it > 0).map($it) gets a.connect(filter(it>0),map($it))
-  let methods = b
-  var m: seq[NimNode] = @[]
-  var node = methods
+  # SinglyLinkedList iterates over items in reverse order they have been prepended
+  var m = initSinglyLinkedList[NimNode]()
+  # b contains the calls in a tree - the first calls are deeper in the tree
+  # this has to be flattened out as argument list
+  var node = b
+  let args = nnkArgList.newTree().add(a)
   while node.kind == nnkCall:
     if node[0].kind == nnkDotExpr:
-      m.add(nnkCall.newTree(node[0].last))
-      var z = 0
-      for b in node:
-        if z > 0:
-          m[^1].add(b)
-        z += 1
-      node = node[0][0]
+      m.prepend(nnkCall.newTree(node[0].last))
+      for z in 1..<node.len:
+        m.head.value.add(node[z])
+      node = node[0][0] # go down in the tree
     elif node[0].kind == nnkIdent:
-      m.add(node)
+      m.prepend(node)
       break
     else:
       break
-  var m2: seq[NimNode] = @[a]
-  for z in countdown(high(m), low(m)):
-    m2.add(m[z])
-  let mad = nnkArgList.newTree(m2)
-  result = iterHandler(mad, debug, td)
+  for it in m:
+    args.add(it)
+  result = iterHandler(args, debug, td)
 
   if path != nil: # insert the result back into the original tree
     result = outer.apply(path, result)
