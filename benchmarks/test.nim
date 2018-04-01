@@ -1,39 +1,22 @@
-import zero_functional, strutils, sequtils, bench, times, os
+import zero_functional, strutils, bench, times, os
 
-var data = readFile("data.txt")
+let a = readFile("data.txt").split(" ") --> map(uint8(parseInt(it))) --> to(seq[uint8])
+let b = 0'u32..<2_000_000'u32 --> to(seq[uint32])
 
-let a = data.split(" ") --> map(parseInt(it)) --> to(seq[int])
-let b = (0..<2_000_000) --> to(seq[int])
-
-proc f(a: int, b: int): int =
-  a + b
-
+proc f(a: uint, b: uint): uint =
+  result = a + b
 
 proc example0: bool =
-  var n = zip(a, b) -->
-                map(f(it[0], it[1])).
-                filter(it mod 4 > 1).
-                map(it * 2).
-                all(it > 4)
-  result = n
+  result = zip(a, b) -->
+              map(f(it[0], it[1])).
+              filter((it mod 4'u) > 1'u).
+              map(it * 2'u8).
+              all(it > 4'u)
+callBench(example0)
 
-proc example1: bool =
-  var o = a -->
+proc example1: int =
+  result = a -->
             map(f(it, it)).
-            map(it - 7).
+            map(int(it) - 7).
             fold(0, it + a)
-  result = o > 0 # otherwise optimized
-
-
-var hack = false
-
-benchmark "example0":
-  hack = example0()
-    
-echo hack
-
-benchmark "example1":
-  hack = example1()
-
-echo hack
-
+callBench(example1)

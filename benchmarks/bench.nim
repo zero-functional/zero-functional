@@ -1,7 +1,7 @@
 import times, os, strutils, sequtils, macros
 
 template finish(benchmarkName: string, a: NimNode): untyped =
-  let elapsed = epochTime() - `a`
+  let elapsed = (epochTime() - `a`) * 1000
   let elapsedStr = elapsed.formatFloat(format = ffDecimal, precision = 3)
   echo "$1 $2" % [benchmarkName, elapsedStr]
 
@@ -19,3 +19,13 @@ macro benchmark*(benchmarkName: static[string], code: untyped): untyped =
   result.add(getAst(finish(benchmarkName, a)))
   # echo repr(result)
 
+proc echoBenchmark*[T](benchmarkName: static[string], call: proc (): T): untyped =
+  if true:
+    var res: T.type
+    benchmark benchmarkName:
+      res = call()
+    echo res
+
+macro callBench*(a: untyped): untyped =
+  quote:
+    echoBenchmark(`a`.repr, `a`)
