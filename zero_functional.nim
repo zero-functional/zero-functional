@@ -12,13 +12,14 @@ const implicitTypeSuffix = "?" # used when result type is automatically determin
 const defaultResultType = "seq[int]" & implicitTypeSuffix
 const listIteratorName = "__itlist__"
 const listIteratorInnerName = "__itlist2__"
+const minHighVariableName = "__minHigh__"
 
 type 
 
   Command {.pure.} = enum
     ## All available commands.
     ## 'to' - is a virtual command
-    all, combinations, exists, filter, find, flatten, fold, foreach, index, indexedMap, map, reduce, reduceIdx, sub, zip, to
+    all, combinations, exists, filter, find, flatten, fold, foreach, index, indexedFlatten, indexedMap, indexedReduce, map, reduce, sub, zip, to
 
   ReduceCommand {.pure.} = enum
     ## additional commands that operate as reduce command
@@ -36,6 +37,7 @@ type
     typeDescription: string ## type description of the outer list type
     resultType: string ## result type when explicitly set
     needsIndex: bool  ## true if the idx-variable is needed
+    hasMinHigh: bool  ## true if the minHigh variable is defined and the loop should use indices rather than iterator
     nextIndexInc: bool ## if set to true the index will be increment by 1 for the next iterator 
 
   ## used for "combinations" command as output
@@ -75,9 +77,9 @@ type
   
 
 static: # need to use var to be able to concat
-  let PARAMETERLESS_CALLS = [$Command.flatten, $Command.combinations].toSet
+  let PARAMETERLESS_CALLS = [$Command.flatten, $Command.indexedFlatten, $Command.combinations].toSet
   let FORCE_SEQ_HANDLERS = [$Command.indexedMap, $Command.flatten, $Command.zip].toSet
-  let NEEDS_INDEX_HANDLERS = [$Command.indexedMap, $Command.index, $Command.flatten, $Command.reduceIdx, $Command.sub, $Command.index, $Command.combinations].toSet
+  let NEEDS_INDEX_HANDLERS = [$Command.indexedMap, $Command.index, $Command.indexedReduce, $Command.sub, $Command.index, $Command.combinations].toSet
   let CANNOT_BE_ALTERED_HANDLERS = [Command.map, Command.indexedMap, Command.combinations, Command.flatten, Command.zip].toSet
   var SEQUENCE_HANDLERS = [$Command.map, $Command.filter, $Command.sub, $Command.combinations].toSet
   var HANDLERS = [$Command.exists, $Command.all, $Command.index, $Command.fold, $Command.reduce, $Command.foreach, $Command.find].toSet
@@ -98,7 +100,9 @@ proc toCommand(key: string): Option[Command] =
 
 ## Converts the id-string to its ReduceCommand counterpart.
 proc toReduceCommand(key: string): Option[ReduceCommand] =
-  key.toEnum(ReduceCommand)
+  if key.startswith("indexed"): 
+    return key[7..key.len-1].toLowerAscii().toReduceCommand()
+  result = key.toEnum(ReduceCommand)
 
 proc zf_fail(msg: string) {.compileTime.} =
   assert(false, ": " & msg)
@@ -184,11 +188,11 @@ proc replace(node: NimNode, searchNode: NimNode, replNode: NimNode): NimNode =
   if node.len > 0: 
     for i in 0..<node.len:
       let child = node[i]
-      if child == searchNode:
+      if child.kind == searchNode.kind and child.label == searchNode.label:
         node[i] = replNode
       else:
         node[i] = child.replace(searchNode, replNode)
-  elif node == searchNode:
+  elif node.kind == searchNode.kind and node.label == searchNode.label:
     result = replNode
 
 ## Find a node given its kind and - optionally - its content.
@@ -292,7 +296,9 @@ proc createAutoProc(node: NimNode, isSeq: bool, resultType: string, td: string):
     # now we try to determine the result type of the operation automatically...
     # this is a bit tricky as the operations zip, map and flatten may / will alter the result type.
     # hence we try to apply the map-operation to the iterator, etc. to get the resulting iterator (and list) type.
-    let listRef = node[0]
+    var listRef = node[0]
+    if listRef.kind == nnkCall and listRef[0].label == $Command.zip:
+      listRef = listRef.findNode(nnkPar)[0][0]
     let itIdent = newIdentNode(iteratorVariableName) # the original "it" used in the closure of "map" command
     let idxIdent = newIdentNode(indexVariableName)
     var handlerIdx = 0
@@ -309,7 +315,7 @@ proc createAutoProc(node: NimNode, isSeq: bool, resultType: string, td: string):
         let isFlatten = label == $Command.flatten
         if label == $Command.combinations: 
           hasCombination = true
-        elif label == $Command.map or isIndexed or isFlatten: # zip is part of map and will not be checked
+        elif label == $Command.map or label == $Command.zip or isIndexed or isFlatten: # zip is part of map and will not be checked
           var params : NimNode = 
             if isFlatten:
               nnkStmtList.newTree().add(newIdentNode(iteratorVariableName))
@@ -327,23 +333,29 @@ proc createAutoProc(node: NimNode, isSeq: bool, resultType: string, td: string):
           let handlerCall = quote:
             proc `handler`(`itIdent`: auto): auto =
               nil
-          let q = 
-            if isFlatten:
-              quote:
-                for it in `params`:
-                  return it
-            else:
-              quote:
-                var `idxIdent` = 0  # could be used as map param
-                when `hasCombination`:
-                  var `comboNode` = createCombination([0,0],[0,0]) # could be used as map param
-                when `isIndexed`:
+          var q : NimNode = nil 
+          if isFlatten:
+            q = quote:
+              for it in `params`:
+                return it
+          else:
+            var createCombo = nnkStmtList.newTree()
+            if hasCombination:
+              createCombo = quote:
+                var `comboNode` = createCombination([0,0],[0,0]) # could be used as map param
+                discard `comboNode`
+            var createResult =
+              if isIndexed:
+                quote:
                   `resultIdent` = (0,`params`)
-                else:
+              else:
+                quote:
                   `resultIdent` = `params`
-                discard `idxIdent`
-                when `hasCombination`:
-                  discard `comboNode`
+            q = quote:
+              var `idxIdent` = 0  # could be used as map param
+              `createCombo`
+              `createResult`
+              discard `idxIdent`
           handlerCall.getStmtList().add(q)
           handlerInit.add(handlerCall)
       
@@ -452,6 +464,7 @@ proc inlineAddElem(ext: ExtNimNode, addItem: NimNode): NimNode {.compileTime.} =
 ## Implementation of the 'map' command.
 ## Each element of the input is mapped to a given function.
 proc inlineMap(ext: ExtNimNode, indexed: bool = false): ExtNimNode {.compileTime.} =
+  assert(ext.node.len == 2, "number of parameters for 'map' must be 1! - for tuples use extra brackets.")
   let itIdent = ext.itNode()
   let adaptedF = ext.adapt()
   var next: NimNode
@@ -489,8 +502,9 @@ proc inlineFilter(ext: ExtNimNode): ExtNimNode {.compileTime.} =
 
 ## Implementation of the 'flatten' command.
 ## E.g. @[@[1,2],@[3],@[4,5,6]] --> flatten() == @[1,2,3,4,5,6]
-proc inlineFlatten(ext: ExtNimNode): ExtNimNode {.compileTime} =
+proc inlineFlatten(ext: ExtNimNode, indexed: bool = false): ExtNimNode {.compileTime} =
   let itIdent = ext.itNode()
+  let itIdentNew = mkItNode(ext.index+1)
   let itPrevIdent = ext.prevItNode()
   let idxIdent = newIdentNode(indexVariableName)
   let idxFlatten = newIdentNode("idxFlatten")
@@ -498,15 +512,32 @@ proc inlineFlatten(ext: ExtNimNode): ExtNimNode {.compileTime} =
     var `idxFlatten` = -1
   ext.initials.add(i)
 
-  let isLast = ext.isLastItem
-  let push = if isLast: ext.inlineAddElem(itIdent) else: nil
+  var idxDef = nnkStmtList.newTree() # dummy statements when not using indexed
+  var idxIncr = nnkStmtList.newTree()
+  var newItIdent = nnkStmtList.newTree()
+  var pushItIdent = itIdent
+  let idxIdentInner = newIdentNode("__identInner__")
+  if indexed:
+    idxDef = quote:
+      var `idxIdentInner` = -1 
+    idxIncr = quote:
+      `idxIdentInner` += 1
+    newItIdent = quote:
+      let `itIdentNew` = (`idxIdentInner`, `itIdent`)
+    pushItIdent = itIdentNew
+  let push = if ext.isLastItem: ext.inlineAddElem(pushItIdent) else: nil
   ext.node = quote:
+    `idxDef`
     for `itIdent` in `itPrevIdent`:
-      `idxFlatten` += 1
-      when `isLast`:
-        let `idxIdent` = `idxFlatten` # overwrite the outer value locally
+      `idxIncr`
+      `idxFlatten` += 1 # re-route idx to overall count of items that are flattened out
+      let `idxIdent` = `idxFlatten` # overwrite the outer value locally
+      `newItIdent`
+      discard(`idxIdent`)
       `push` # push might need idxIdent (at least for array items)
-  ext.nextIndexInc = true
+  ext.nextIndexInc = true 
+  if indexed:
+    ext.index += 1 # double increment
   result = ext
 
 ## Implementation of the 'sub' command.
@@ -673,9 +704,8 @@ proc inlineReduce(ext: ExtNimNode): ExtNimNode {.compileTime.} =
   let itIdent = ext.itNode() 
   ext.index += 1
   var label = ext.node[0].label
-  let index = label.endswith("Idx")
+  let index = label.startswith("indexed")
   if index:
-    label = label[0..label.len-4]
     ext.needsIndex = true
   let reduceCmd = label.toReduceCommand()
   if reduceCmd != none(ReduceCommand):
@@ -762,7 +792,26 @@ proc inlineSeq(ext: ExtNimNode): ExtNimNode {.compileTime.} =
   let itIdent = ext.itNode()
   let listRef = ext.listRef
 
-  if ext.isListType():
+  if ext.hasMinHigh:
+    let idxIdent = newIdentNode(indexVariableName)
+    let minHigh = newIdentNode(minHighVariableName)
+    var itDef = nnkStmtList.newTree()
+    if ext.node.kind == nnkCall:
+      let zipArgs = ext.adapt()
+      itDef = quote:
+        let `itIdent` = `zipArgs`
+    else:
+      itDef = quote:
+        let `itIdent` = `listRef`[`idxIdent`]
+      let e = quote:
+        discard `itIdent`
+      ext.endLoop.add(e)
+    ext.node = quote:
+      for `idxIdent` in 0..`minHigh`:
+        `itDef`
+        nil
+
+  elif ext.isListType():
     # list iterator implemnentation
     let listRef = ext.listRef
     let itlist = newIdentNode(listIteratorName)
@@ -811,7 +860,9 @@ proc inlineElement(ext: ExtNimNode): ExtNimNode {.compileTime.} =
         ext.ensureParameters(1)
       case cmd:
       of Command.zip:
-        assert(false, "'zip' should already have been transformed to 'map'")
+        ext.ensureFirst()
+        assert(ext.hasMinHigh, "internal error: 'minHigh' should be defined!")
+        return ext.inlineSeq()
       of Command.map:
         return ext.inlineMap()
       of Command.filter:
@@ -837,7 +888,7 @@ proc inlineElement(ext: ExtNimNode): ExtNimNode {.compileTime.} =
       of Command.reduce:
         ext.ensureLast()
         return ext.inlineReduce()
-      of Command.reduceIdx:
+      of Command.indexedReduce:
         ext.ensureLast()
         return ext.inlineReduce()
       of Command.foreach:
@@ -846,6 +897,8 @@ proc inlineElement(ext: ExtNimNode): ExtNimNode {.compileTime.} =
         return ext.inlineSub()
       of Command.flatten:
         return ext.inlineFlatten()
+      of Command.indexedFlatten:
+        return ext.inlineFlatten(indexed=true)
       of Command.combinations:
         ext.ensureFirstAfterArrow()
         return ext.inlineCombinations()
@@ -855,7 +908,7 @@ proc inlineElement(ext: ExtNimNode): ExtNimNode {.compileTime.} =
       if "any" == label:
         warning("any is deprecated - use exists instead")
         return ext.inlineExists()
-      elif (label.toReduceCommand() != none(ReduceCommand)) or (label.endswith("Idx") and label[0..label.len-4].toReduceCommand() != none(ReduceCommand)):
+      elif (label.toReduceCommand() != none(ReduceCommand)):
         ext.ensureLast()
         return ext.inlineReduce()
       else:
@@ -930,36 +983,40 @@ proc replaceZip(args: NimNode) : NimNode {.compileTime.} =
   var idx = 0
   result = nnkStmtList.newTree()
 
+  # zip(a,b,c) <=> a --> zip(b,c) <~> a --> map(a[idx],b[idx],c[idx])
+  let highList = nnkBracket.newTree()
   for arg in args:
     # search for all zip calls and replace them with filter --> map
     if arg.kind == nnkCall and arg[0].label == $Command.zip:
       let zipCmd = arg.copyNimTree()
-      let highList = nnkBracket.newTree()
       let params = newPar()
-      if idx == 0:
-        params.add(newIdentNode(iteratorVariableName)) # map(it)
-      for paramIdx in params.len+1..<zipCmd.len:
+      if idx > 0:
+        # a[idx]
+        params.add(nnkBracketExpr.newTree(args[0], newIdentNode(indexVariableName)))
+        result.add(args[0].wrapIndexable())
+      for paramIdx in 1..<zipCmd.len:
         let p = zipCmd[paramIdx]
         if p.kind != nnkInfix and p.kind != nnkBracketExpr and p.label != iteratorVariableName:
           result.add(p.wrapIndexable())
           highList.add(nnkCall.newTree(newIdentNode("high"), p))
           params.add(nnkBracketExpr.newTree(p, newIdentNode(indexVariableName))) # map(it,b[idx],...)
-        else:
+        elif idx > 0:
           params.add(p)
+        else:
+          assert(false, "No complex arguments allowed in 'zip' operation when used as first command - rather use 'a --> zip(it, ...)'.")
+
       if idx == 0:
         # set the first arg of zip as the first arg in the chain (e.g. moving `a` to the left of `-->`)
         args.insert(0, zipCmd[1]) # a --> ...
         idx = 1
-      if highList.len > 0:
-        let minHigh = genSym(nskLet, "__minHigh__")
-        let i = quote:
-          let `minHigh`= min(`highList`)
-        result.add(i)
-        let filterCmd = newCall($Command.filter, infix(newIdentNode(indexVariableName), "<=", minHigh))  
-        args.insert(idx, filterCmd) # insert the check for the indices before the map
-        idx += 1
+
       args[idx] = newCall($Command.map, params)
     idx += 1
+  if highList.len > 0:
+    let minHigh = newIdentNode(minHighVariableName)
+    let i = quote:
+      let `minHigh`= min(`highList`)
+    result.add(i)
 
 ## Check if the "to" parameter is used to generate a specific result type.
 ## The requested result type is returned and the "to"-node is removed.
@@ -1010,27 +1067,32 @@ proc checkTo(args: NimNode, td: string): string {.compileTime.} =
 proc iterHandler(args: NimNode, debug: bool, td: string): NimNode {.compileTime.} =
   let resultType = args.checkTo(td) 
   let preInit = args.replaceZip() # zip is replaced with map + filter
+  let hasMinHigh = preInit.len > 0
   let lastCall = args.last[0].label
   let isSeq = lastCall in SEQUENCE_HANDLERS
-  var defineIdxVar = true
+  var defineIdxVar = not hasMinHigh
+  var needsIndexVar = true
 
-  if defineIdxVar:
-    if not isSeq or not (resultType != nil and resultType.startswith("array") or (resultType == nil and td.startswith("array"))): 
-      if nil == args.findNode(nnkIdent, indexVariableName):  
-        defineIdxVar = false
+  if not isSeq or not (resultType != nil and resultType.startswith("array") or (resultType == nil and td.startswith("array"))): 
+    if nil == args.findNode(nnkIdent, indexVariableName):  
+      needsIndexVar = true
 
-  # check if 'var idx' has to be created or not - and 'idx += 1' to be added
-  for arg in args:
-    if arg.kind == nnkCall:
-      let label = arg[0].label
-      if label in NEEDS_INDEX_HANDLERS:
-        defineIdxVar = true
+  if not defineIdxVar:
+    # check if 'var idx' has to be created or not - and 'idx += 1' to be added
+    for arg in args:
+      if arg.kind == nnkCall:
+        let label = arg[0].label
+        if label in NEEDS_INDEX_HANDLERS:
+          defineIdxVar = true
 
   var code: NimNode
   let needsFunction = (lastCall != $Command.foreach)
   if needsFunction:
-    result = preInit.add(args.createAutoProc(isSeq, resultType, td))
-    code = result.last.getStmtList()    
+    result = args.createAutoProc(isSeq, resultType, td)
+    code = result.last.getStmtList() 
+    #result.last.insert(1, preInit)
+    if preInit.len > 0:
+      code.insert(0, preInit)
     result = nnkCall.newTree(result)
   else:
     # there is no extra function, but at least we have an own section here - preventing double definitions
@@ -1072,7 +1134,8 @@ proc iterHandler(args: NimNode, debug: bool, td: string): NimNode {.compileTime.
                       listRef: listRef,
                       typeDescription: td,
                       resultType: resultType,
-                      needsIndex: defineIdxVar,
+                      needsIndex: needsIndexVar,
+                      hasMinHigh: hasMinHigh,
                       nextIndexInc: false).inlineElement()
     let newCode = ext.node.getStmtList()
     code.add(ext.node)
@@ -1080,12 +1143,12 @@ proc iterHandler(args: NimNode, debug: bool, td: string): NimNode {.compileTime.
       startNode = ext.node
     if newCode != nil:
       code = newCode
-    if not defineIdxVar:
+    if not hasMinHigh and not defineIdxVar:
       defineIdxVar = ext.needsIndex
     if ext.nextIndexInc:
-      index += 1
+      index = ext.index + 1
 
-  if defineIdxVar:
+  if not hasMinHigh and defineIdxVar:
     let idxIdent = newIdentNode(indexVariableName)
     let identDef = quote:
       var `idxIdent` = 0 
@@ -1101,7 +1164,7 @@ proc iterHandler(args: NimNode, debug: bool, td: string): NimNode {.compileTime.
   if endLoop.len > 0:
     loopNode.last.add(endLoop)
 
-  if defineIdxVar and loopNode != nil:
+  if not hasMinHigh and defineIdxVar and loopNode != nil:
     # add index increment to end of the for loop
     let idxIdent = newIdentNode(indexVariableName)
     let incrIdx = quote:
@@ -1186,12 +1249,8 @@ proc delegateMacro(a: NimNode, b1:NimNode, debug: bool, td: string): NimNode =
     result = outer.apply(path, result)
 
 ## delegate call to get the type information.
-macro delegateArrow(td: typedesc, a: untyped, b: untyped): untyped =
-  result = delegateMacro(a, b, false, getTypeInfo(td.getType[1], td.getTypeInst[1]))
-
-## delegate call to get the type information (debug mode).
-macro delegateArrowDbg(td: typedesc, a: untyped, b: untyped): untyped =
-  result = delegateMacro(a, b, true, getTypeInfo(td.getType[1], td.getTypeInst[1]))
+macro delegateArrow(td: typedesc, a: untyped, b: untyped, debug: static[bool]): untyped =
+  result = delegateMacro(a, b, debug, getTypeInfo(td.getType[1], td.getTypeInst[1]))
   
 ## The arrow "-->" should not be part of the left-side argument a.
 proc checkArrow(a: NimNode, b: NimNode, arrow: string): (NimNode, NimNode, bool) =
@@ -1216,12 +1275,12 @@ macro connect*(args: varargs[untyped]): untyped =
 macro `-->`*(a: untyped, b: untyped): untyped =
   let (a,b,debug) = checkArrow(a,b,"-->")
   if a.kind == nnkIdent:
-    if not debug:
+    if not debug: # using debug (or `debug`) directly does not work (?!)
       result = quote:
-        delegateArrow(type(`a`), `a`, `b`)
+        delegateArrow(type(`a`), `a`, `b`, false)
     else:
       result = quote:
-        delegateArrowDbg(type(`a`), `a`, `b`)
+        delegateArrow(type(`a`), `a`, `b`, true)
   else:
     result = delegateMacro(a, b, debug, "seq")
 
@@ -1230,6 +1289,6 @@ macro `-->>`*(a: untyped, b: untyped): untyped =
   let (a,b,_) = checkArrow(a,b,"-->")
   if a.kind == nnkIdent:
     result = quote:
-      delegateArrowDbg(type(`a`), `a`, `b`)
+      delegateArrow(type(`a`), `a`, `b`, true)
   else:
     result = delegateMacro(a, b, true, "seq")

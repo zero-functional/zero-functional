@@ -484,7 +484,8 @@ suite "valid chains":
 
   test "zip with simpleIter":
     let si = initSimpleIter()
-    check(zip(si, a) --> map(it[0]+it[1]) == @[3,10,-1]) # si as left argument works - because it is being iterated
+    reject(zip(si, a) --> map(it[0]+it[1]) == @[3,10,-1]) # si needs an index
+    accept(si --> map((it, a[idx])) -->  map(it[0]+it[1]) == @[3,10,-1]) # this will work
     reject(zip(a,si) --> map(it)) # si needs `[]` and high - we do that now...
     proc `[]`(si: SimpleIter, idx: int) : int = si.items[idx]
     proc `high`(si: SimpleIter) : int = si.items.high()
@@ -563,24 +564,24 @@ suite "valid chains":
     let a2 = @[1,4,-2,-3,6]
     # first zip, then multiply with each other @[1,-8,6,-12,30], then filter > 0, then sum up
     check(zip(a1,a2) --> map(it[0]*it[1]) --> filter(it > 0) --> fold(0, a + it)         == 43)
-    # internally zip(a1,a2) --> ... is already translated to a1 --> map(it,a2[idx]) which is the same as  
-    check(a1 --> zip(it, a2) --> map(it[0]*it[1]) --> filter(it > 0) --> fold(0, a + it) == 43)
+    # internally zip(a1,a2) --> ... is already translated to a1 --> map((a1[idx],a2[idx])) which is roughly the same as  
+    check(a1 --> map((a1[idx], a2[idx])) --> map(it[0]*it[1]) --> filter(it > 0) --> fold(0, a + it) == 43)
     # this is not the same - filtering the input seq for positive values only
-    check(a1 --> filter(it > 0) --> zip(it,a2) --> map(it[0]*it[1]) --> fold(0, a + it)  == 25)
+    check(a1 --> filter(it > 0) --> zip(a2) --> map(it[0]*it[1]) --> fold(0, a + it)  == 25)
     
     # the right hand side of zip is more flexible - you could also use expressions with `it`:
     check(a1 --> filter(it > 0).
                 zip(-1*it, a2).
-                map(it[0]*it[1]).
+                map(it[1]*it[2]). # it[0] is the list itself
                 fold(0, a+it) == -25)
   
   test "subcommands of reduce":
     let arr = [3,11,2,9,1,8,7]
     # find (idx,min) value
-    check(arr --> minIdx() == (4,1))  
+    check(arr --> indexedMin() == (4,1))  
     check(arr --> sum() == 41)
     check(arr --> filter(it < 10) --> max() == 9)
-    check(arr --> filter(it < 7) --> maxIdx() == (0,3))
+    check(arr --> filter(it < 7) --> indexedMax() == (0,3))
     # sumIdx does not make much sense - here the index of the last added element 8 is 5, the sum is 28 
-    check(arr --> filter(it > 7) --> sumIdx()  == (5,28))
+    check(arr --> filter(it > 7) --> indexedSum()  == (5,28))
     check(arr --> filter(it > 7) --> product() == 792)

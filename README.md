@@ -182,11 +182,13 @@ check(x == @[2])
 
 `zip` can work with n sequences. `zip` is (roughly) internally translated to:
 ```nim
-# zip(a,b,c) --> ...
-let minHigh = min([b.high(), c.high()])
-a --> filter(idx <= minHigh) --> map((it, b[idx], c[idx])) --> ...
+zip(a,b,c) <=> 
+a --> zip(b,c) <~> 
+let minHigh = min([a.high(), b.high(), c.high()])
+a --> filter(idx <= minHigh) --> map(a[idx], b[idx], c[idx])
 ```
-So for zip in order to work properly at least the 2nd and following parameters have to support access with `[]` and the `high` procedure.
+On the right side of `-->` (or as 2nd and later command) the left side of `-->` is added to the zip result.
+For zip in order to work properly all arguments have to support access with `[]` and the `high` procedure.
 If those procedures are not available the macro tries to call the procedure `mkIndexable` on that parameter. Using this helper the parameter can be wrapped with a new type that supports `[]` and `high`.
 
 ### exists
@@ -264,14 +266,14 @@ Return the product of the (filtered) elements (`*`)
 #### sum
 Return the sum of the (filtered) elements (`+`).
 
-### reduceIdx
+### indexedReduce
 
-By adding the `Idx` suffix to `reduce` or to the reduce commands above, the index of the last value that was used for the `result` and the actual result of the operation are returned.
+By adding the `indexed` prefix to `reduce` or to the reduce commands above, the index of the last value that was used for the `result` and the actual result of the operation are returned.
 For `sum` and `product` this is not actually helpful but it can be used to find the indices of the `min` and `max` elements.
 
 ```nim
-check(@[11,2,0,-2,1,3,-1] --> minIdx() == (3,-2))
-check(@[11,2,0,-2,1,3,-1] --> maxIdx() == (11,0))
+check(@[11,2,0,-2,1,3,-1] --> indexedMin() == (3,-2))
+check(@[11,2,0,-2,1,3,-1] --> indexedMax() == (11,0))
 ```
 
 ### foreach
