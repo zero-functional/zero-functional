@@ -5,6 +5,7 @@
 A library providing (almost) zero-cost chaining for functional abstractions in Nim.
 
 ```nim
+## see full example at benchmarks/test.nim
 var n = zip(a, b) -->
             map(f(it[0], it[1])).
             filter(it mod 4 > 1).
