@@ -322,7 +322,7 @@ Similar commands like `sub` that result in parts of the lists being iterated on 
 As opposed to `filter` the condition in `drop` is ignored, once it was not true any more.
 ```nim
 check(@[-1,2,-3,4,-5] --> dropWhile(it < 0) --> sum() == -2)
-check(@[-1,2,-3,4,-5] --> filter(it < 0) --> sum() == 6)
+check(@[-1,2,-3,4,-5] --> filter(it >= 0)   --> sum() == 6)
 ```
 #### take
 `take`(`n`) works on n items of the collection and then breaking. This is useful for very large (infinite) collections or iterators - the same for `takeWhile`.
