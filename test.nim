@@ -280,13 +280,13 @@ suite "valid chains":
 
   test "array sub":
     check((aArray--> sub(1)) == [0, 8, -4])
-    check((aArray --> sub(1,2)) == [0, 8, 0])
-    check((aArray --> sub(1,^1)) == [0, 8, 0])
+    check((aArray --> sub(1,1)) == [0, 8, 0])
+    check((aArray --> sub(1,^2)) == [0, 8, 0])
 
   test "array subSeq":
     check((aArray --> subSeq(1)) == @[8, -4])
-    check((aArray --> subSeq(1,2)) == @[8])
-    check((aArray --> subSeq(1,^1)) == @[8])
+    check((aArray --> subSeq(1,1)) == @[8])
+    check((aArray --> subSeq(1,^2)) == @[8])
     
   test "array indexedMap":
     check((aArray --> map(it + 2) --> indexedMap(it) --> map(it[0] + it[1])) == @[4, 11, 0])
@@ -304,8 +304,8 @@ suite "valid chains":
   test "seq sub":
     check((a --> filter(idx >= 1)) == @[8, -4])
     check((a --> sub(1)) == @[8, -4])
-    check((a --> sub(1,2)) == @[8])
-    check((a --> sub(1,^1)) == @[8])
+    check((a --> sub(1,1)) == @[8])
+    check((a --> sub(1,^2)) == @[8])
 
   test "enum map":
     check((Suit --> map($it)) == @["D", "H", "S", "C"])
@@ -353,6 +353,10 @@ suite "valid chains":
     check(f --> flatten() == @[1,2,3,4,5,6])
     let f2 = @[@["1","2","3"],@["4","5"],@["6"]]
     check((f2 --> flatten()) == @["1","2","3","4","5","6"])
+    # indexedFlatten attaches the index of the element within the sub-list - that now has been flattened
+    check(f --> indexedFlatten() --> to(seq[(int,int)]) == @[(0,1),(1,2),(2,3),(0,4),(1,5),(0,6)])
+    # this is not the same as:
+    check(f --> flatten() --> map((idx,it)) ==             @[(0,1),(1,2),(2,3),(3,4),(4,5),(5,6)])
 
   test "flatten sum":
     check((@[a,b] --> flatten() --> fold(0, a + it)) == 9)
@@ -585,3 +589,16 @@ suite "valid chains":
     # sumIdx does not make much sense - here the index of the last added element 8 is 5, the sum is 28 
     check(arr --> filter(it > 7) --> indexedSum()  == (5,28))
     check(arr --> filter(it > 7) --> product() == 792)
+  
+  test "drop, take, dropWhile, takeWhile":
+    # filter it > 15 => 16,17,..., sub(3) = 19,20,...
+    check((11..222) --> filter(it > 15) --> sub(3,9) == @[19, 20, 21, 22, 23, 24, 25])
+    # take 2 after take 10 - is actually the same as take 2 on the whole 
+    check((11..222) --> take(10) --> take(2) --> sum() == 23)
+    # here the filter does actually not count
+    check((11..222) --> filter(it > 4) --> take(10) == @[11, 12, 13, 14, 15, 16, 17, 18, 19, 20])
+    # drop 11,12 and take the next 5
+    check((11..222) --> drop(2) --> take(5) == @[13, 14, 15, 16, 17])
+    # drop 11..13, then drop the 1=14, then take until 26
+    check((11..222) --> dropWhile((it mod 7) > 0).drop(1).takeWhile((it mod 13) != 1) == @[15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26])
+    

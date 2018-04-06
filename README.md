@@ -5,7 +5,6 @@
 A library providing (almost) zero-cost chaining for functional abstractions in Nim.
 
 ```nim
-## see full example at benchmarks/test.nim
 var n = zip(a, b) -->
             map(f(it[0], it[1])).
             filter(it mod 4 > 1).
@@ -299,12 +298,52 @@ a --> foreach(it = it * 2)
 check (a == @[2,4,6]
 ```
 
+### sub
+
+Works on a part of the input collection - `sub`(`fromIndex`,`toIndex`) or drop(`fromIndex`) - similarly to ranges, starting with `fromIndex`  and ending (inclusive) with `endIndex` or runs til the end, when `endIndex` is not given.
+```nim
+check((1..10) --> sub(2,5) --> to(list) == @[2,3,4,5])
+```
+The `endIndex` may be a `BackwardsIndex` like `^1`, but then the collection has to have a `len`.
+`sub` is similar to the `filter` function working on the `idx` variable - however `sub` uses an internal index that is not affected by the outcome of preceeding filtering functions.
+```nim
+# in filter `idx` counts the iterated items
+check(@[-1,2,-3,4,-5,6,-7,8] --> filter(it > 0) --> filter(idx >= 3) == @[4,6,8])
+# sub increments its own index when `it > 0`
+check(@[-1,2,-3,4,-5,6,-7,8] --> filter(it > 0) --> sub(3) == @[8])
+```
+
+Similar commands like `sub` that result in parts of the lists being iterated on or generated are: `drop`, `dropWhile`, `take` and `takeWhile`.
+
+#### drop
+`drop`(`n`) drops n items before working on the collection. This is equivalent to `sub`(`n`).
+#### dropWhile
+`drop`(`cond`) drops the items as long as the condition in `cond` is met - so starts working on the collection when the condition is not fulfilled any more.
+As opposed to `filter` the condition in `drop` is ignored, once it was not true any more.
+```nim
+check(@[-1,2,-3,4,-5] --> dropWhile(it < 0) --> sum() == -2)
+check(@[-1,2,-3,4,-5] --> filter(it < 0) --> sum() == 6)
+```
+#### take
+`take`(`n`) works on n items of the collection and then breaking. This is useful for very large (infinite) collections or iterators - the same for `takeWhile`.
+#### takeWhile`
+`takeWhile`(`cond`) works on the collection as long as the condition in `cond` is met. Otherwise it breaks the processing.
+
+
 ### flatten
 
 Working on a collection of iterable items, the flatten function flattens out the elements of the collection.
 
 ```nim
 check(@[@[1,2],@[3],@[4,5,6]] --> flatten() == @[1,2,3,4,5,6])
+```
+
+#### indexedFlatten
+
+Is similar to `flatten`, except that it returns the index inside original sub-lists with the actual content.
+```nim
+check(@[@[1,2],@[3],@[4,5,6]] --> indexedFlatten()            == @[(0,1),(1,2),(0,3),(0,4),(1,5),(2,6)])
+check(@[@[1,2],@[3],@[4,5,6]] --> flatten() --> map((idx,it)) == @[(0,1),(1,2),(2,3),(3,4),(4,5),(5,6)])
 ```
 
 ### combinations

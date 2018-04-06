@@ -19,7 +19,8 @@ type
   Command {.pure.} = enum
     ## All available commands.
     ## 'to' - is a virtual command
-    all, combinations, exists, filter, find, flatten, fold, foreach, index, indexedFlatten, indexedMap, indexedReduce, map, reduce, sub, zip, to
+    all, combinations, drop, dropWhile, exists, filter, find, flatten, fold, foreach, 
+    index, indexedFlatten, indexedMap, indexedReduce, map, reduce, sub, zip, take, takeWhile, to
 
   ReduceCommand {.pure.} = enum
     ## additional commands that operate as reduce command
@@ -78,10 +79,11 @@ type
 
 static: # need to use var to be able to concat
   let PARAMETERLESS_CALLS = [$Command.flatten, $Command.indexedFlatten, $Command.combinations].toSet
-  let FORCE_SEQ_HANDLERS = [$Command.indexedMap, $Command.flatten, $Command.zip].toSet
-  let NEEDS_INDEX_HANDLERS = [$Command.indexedMap, $Command.index, $Command.indexedReduce, $Command.sub, $Command.index, $Command.combinations].toSet
+  let FORCE_SEQ_HANDLERS = [$Command.indexedMap, $Command.flatten, $Command.indexedFlatten, $Command.zip].toSet
+  let NEEDS_INDEX_HANDLERS = [$Command.indexedMap, $Command.index, $Command.indexedReduce, $Command.index, $Command.combinations].toSet
   let CANNOT_BE_ALTERED_HANDLERS = [Command.map, Command.indexedMap, Command.combinations, Command.flatten, Command.zip].toSet
-  var SEQUENCE_HANDLERS = [$Command.map, $Command.filter, $Command.sub, $Command.combinations].toSet
+  var SEQUENCE_HANDLERS = [$Command.map, $Command.filter, $Command.sub, $Command.combinations, 
+                           $Command.drop, $Command.dropWhile, $Command.take, $Command.takeWhile].toSet
   var HANDLERS = [$Command.exists, $Command.all, $Command.index, $Command.fold, $Command.reduce, $Command.foreach, $Command.find].toSet
   SEQUENCE_HANDLERS.incl(FORCE_SEQ_HANDLERS)
   HANDLERS.incl(SEQUENCE_HANDLERS)
@@ -312,13 +314,16 @@ proc createAutoProc(node: NimNode, isSeq: bool, resultType: string, td: string):
       if child.len > 0:
         let label = child[0].repr
         let isIndexed = label == $Command.indexedMap
-        let isFlatten = label == $Command.flatten
+        let isFlatten = label == $Command.flatten 
+        let isIndexedFlatten = label == $Command.indexedFlatten
         if label == $Command.combinations: 
           hasCombination = true
         elif label == $Command.map or label == $Command.zip or isIndexed or isFlatten: # zip is part of map and will not be checked
           var params : NimNode = 
             if isFlatten:
               nnkStmtList.newTree().add(newIdentNode(iteratorVariableName))
+            elif isIndexedFlatten:
+              nnkStmtList.newTree().add(newPar(newIdentNode(indexVariableName),newIdentNode(iteratorVariableName)))
             else:
               child[1].copyNimTree() # params of the map command
           # use / overwrite the last mapping to get the final result type
@@ -338,6 +343,10 @@ proc createAutoProc(node: NimNode, isSeq: bool, resultType: string, td: string):
             q = quote:
               for it in `params`:
                 return it
+          elif isIndexedFlatten:
+            q = quote:
+              for it in `params`:
+                return (0,it)
           else:
             var createCombo = nnkStmtList.newTree()
             if hasCombination:
@@ -489,15 +498,10 @@ proc inlineMap(ext: ExtNimNode, indexed: bool = false): ExtNimNode {.compileTime
 ## The trailing commands execution depend on the filter condition to be true.
 proc inlineFilter(ext: ExtNimNode): ExtNimNode {.compileTime.} =
   let adaptedTest = ext.adapt()
-  if ext.isLastItem:
-    let push = ext.inlineAddElem(ext.prevItNode())
-    ext.node = quote:
-      if `adaptedTest`:
-        `push`
-  else:
-    ext.node = quote:
-        if `adaptedTest`:
-          nil
+  let push = if ext.isLastItem: ext.inlineAddElem(ext.prevItNode()) else: nil
+  ext.node = quote:
+    if `adaptedTest`:
+      `push`
   result = ext
 
 ## Implementation of the 'flatten' command.
@@ -540,18 +544,70 @@ proc inlineFlatten(ext: ExtNimNode, indexed: bool = false): ExtNimNode {.compile
     ext.index += 1 # double increment
   result = ext
 
+## Implementation of the `takeWhile` command.
+## `takeWhile(cond)` : Take all elements as long as the given condition is true.
+proc inlineTakeWhile (ext: ExtNimNode): ExtNimNode {.compileTime.} =
+  let cond = ext.adapt()
+  let push = if ext.isLastItem: ext.inlineAddElem(ext.prevItNode()) else: nnkStmtList.newTree()
+  ext.node = quote:
+    if not (`cond`):
+      break
+    `push`
+  result = ext
+
+## Implementation of the `take` command.
+## `take(count)` : Take `count` elements.
+proc inlineTake (ext: ExtNimNode): ExtNimNode {.compileTime.} =
+  let idxTake = genSym(nskVar, "__takeIdx__")
+  let count = ext.adapt()
+  let i = quote:
+    var `idxTake` = -1
+  let cmp = quote:
+    `idxTake` += 1; `idxTake` < `count`
+  ext.node = newCall($Command.takeWhile, cmp)
+  ext.initials.add(i)
+  result = ext.inlineTakeWhile()
+
+## Implementation of the `dropWhile` command.
+## `dropWhile(cond)` : drop elements as long the given condition is true. 
+## Once the condition gets false, all following elements are used.
+proc inlineDropWhile (ext: ExtNimNode): ExtNimNode {.compileTime.} =
+  let gate = genSym(nskVar, "__gate__")
+  let cond = ext.adapt()
+  let i = quote:
+    var `gate` = false
+  ext.initials.add(i)
+  let push = if ext.isLastItem: ext.inlineAddElem(ext.prevItNode()) else: nnkStmtList.newTree()
+  ext.node = quote:
+    if `gate` or not (`cond`):
+      `gate` = true
+      `push`
+  result = ext
+
+## Implementation of the `drop` command.
+## `drop(count)` : drop (or discard) the next `count` elements.
+proc inlineDrop (ext: ExtNimNode): ExtNimNode {.compileTime.} =
+  let idxDrop = genSym(nskVar, "__dropIdx__")
+  let count = ext.adapt()
+  let i = quote:
+    var `idxDrop` = -1
+  let cmp = quote:
+    `idxDrop` += 1; `idxDrop` < `count`
+  ext.node = newCall($Command.dropWhile, cmp)
+  ext.initials.add(i)
+  result = ext.inlineDropWhile()
+
 ## Implementation of the 'sub' command.
-## Delegates to 'filter' with the given start and end indices of the sub-list to create.
+## Creates a list from minIndex til maxIndex (inclusive) - 
+## e.g. `a --> sub(0,1)` would contain the first 2 elements of a.
 ## In sub also Backward indices (e.g. ^1) can be used.
 proc inlineSub(ext: ExtNimNode): ExtNimNode {.compileTime.} =
   # sub is re-routed as filter implementation
-  ext.needsIndex = true
-  let index = newIdentNode(indexVariableName)
   let minIndex = ext.node[1]
-  var newCheck: NimNode
   if ext.node.len == 2:
-    newCheck = quote:
-      `index` >= `minIndex`
+    # only one parameter: same as drop
+    ext.node = newCall($Command.drop, minIndex)
+    result = ext.inlineDrop()
   else:
     var endIndex = ext.node[2]
     if repr(endIndex)[0] == '^':
@@ -559,10 +615,20 @@ proc inlineSub(ext: ExtNimNode): ExtNimNode {.compileTime.} =
       let endIndexAbs = endIndex.last
       endIndex = quote:
         len(`listRef`)-`endIndexAbs` # backwards index only works with collections that have a len
-    newCheck = quote:
-      `index` >= `minIndex` and `index` < `endIndex`
-  ext.node = newCall($Command.filter, newCheck)
-  return ext.inlineFilter()
+
+    let idxSub = genSym(nskVar, "__subIdx__")
+    let push = if ext.isLastItem: ext.inlineAddElem(ext.prevItNode()) else: nnkStmtList.newTree()
+    let i = quote:
+      var `idxSub` = -1
+    ext.node = quote:
+      `idxSub` += 1
+      if  `idxSub` >= `minIndex`:
+        if `idxSub` > `endIndex`:
+          break
+        else:
+          `push`
+    ext.initials.add(i)
+    result = ext
 
 ## Implementation of the 'exists' command.
 ## Searches the input for a given expression. If one is found "true" is returned, else "false".
@@ -902,6 +968,14 @@ proc inlineElement(ext: ExtNimNode): ExtNimNode {.compileTime.} =
       of Command.combinations:
         ext.ensureFirstAfterArrow()
         return ext.inlineCombinations()
+      of Command.take:
+        return ext.inlineTake()
+      of Command.takeWhile:
+        return ext.inlineTakeWhile()
+      of Command.drop:
+        return ext.inlineDrop()
+      of Command.dropWhile:
+        return ext.inlineDropWhile()
       of Command.to:
         assert(false, "'to' is only allowed as last argument (and will be removed then).")
     else:
@@ -1292,3 +1366,4 @@ macro `-->>`*(a: untyped, b: untyped): untyped =
       delegateArrow(type(`a`), `a`, `b`, true)
   else:
     result = delegateMacro(a, b, true, "seq")
+
