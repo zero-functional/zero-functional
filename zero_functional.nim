@@ -318,12 +318,10 @@ proc createAutoProc(node: NimNode, isSeq: bool, resultType: string, td: string):
         let isIndexedFlatten = label == $Command.indexedFlatten
         if label == $Command.combinations: 
           hasCombination = true
-        elif label == $Command.map or label == $Command.zip or isIndexed or isFlatten: # zip is part of map and will not be checked
+        elif label == $Command.map or label == $Command.zip or isIndexed or isFlatten or isIndexedFlatten: # zip is part of map and will not be checked
           var params : NimNode = 
-            if isFlatten:
+            if isFlatten or isIndexedFlatten:
               nnkStmtList.newTree().add(newIdentNode(iteratorVariableName))
-            elif isIndexedFlatten:
-              nnkStmtList.newTree().add(newPar(newIdentNode(indexVariableName),newIdentNode(iteratorVariableName)))
             else:
               child[1].copyNimTree() # params of the map command
           # use / overwrite the last mapping to get the final result type

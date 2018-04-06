@@ -354,9 +354,9 @@ suite "valid chains":
     let f2 = @[@["1","2","3"],@["4","5"],@["6"]]
     check((f2 --> flatten()) == @["1","2","3","4","5","6"])
     # indexedFlatten attaches the index of the element within the sub-list - that now has been flattened
-    check(f --> indexedFlatten() --> to(seq[(int,int)]) == @[(0,1),(1,2),(2,3),(0,4),(1,5),(0,6)])
+    check(f --> indexedFlatten()            == @[(0,1),(1,2),(2,3),(0,4),(1,5),(0,6)])
     # this is not the same as:
-    check(f --> flatten() --> map((idx,it)) ==             @[(0,1),(1,2),(2,3),(3,4),(4,5),(5,6)])
+    check(f --> flatten() --> map((idx,it)) == @[(0,1),(1,2),(2,3),(3,4),(4,5),(5,6)])
 
   test "flatten sum":
     check((@[a,b] --> flatten() --> fold(0, a + it)) == 9)
