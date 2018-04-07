@@ -1,9 +1,10 @@
-zero_functional
+# ignore everything ...
+**/*
+# ... except all files that have a dot of course ;-)
+!**/*.*
 nimcache
-benchmarks/test_nim
-benchmarks/test_sequtils_nim
-benchmarks/test_cpp
-benchmarks/test_crystal
-benchmarks/test.exe
-benchmarks/test_rust
-node_modules/
+**gmon.out
+# on windows: ignore all generated files
+**.exe 
+**.ilk 
+**.pdb

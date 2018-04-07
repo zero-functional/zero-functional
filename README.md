@@ -5,7 +5,6 @@
 A library providing (almost) zero-cost chaining for functional abstractions in Nim.
 
 ```nim
-## see full example at benchmarks/test.nim
 var n = zip(a, b) -->
             map(f(it[0], it[1])).
             filter(it mod 4 > 1).
@@ -181,7 +180,16 @@ check(x == @[2])
 
 ### zip
 
-`zip` can only be used at the beginning of the command chain and it can work with n sequences
+`zip` can work with n sequences. `zip` is (roughly) internally translated to:
+```nim
+zip(a,b,c) <=> 
+a --> zip(b,c) <~> 
+let minHigh = min([a.high(), b.high(), c.high()])
+a --> filter(idx <= minHigh) --> map(a[idx], b[idx], c[idx])
+```
+On the right side of `-->` (or as 2nd and later command) the left side of `-->` is added to the zip result.
+For zip in order to work properly all arguments have to support access with `[]` and the `high` procedure.
+If those procedures are not available the macro tries to call the procedure `mkIndexable` on that parameter. Using this helper the parameter can be wrapped with a new type that supports `[]` and `high`.
 
 ### exists
 
@@ -240,11 +248,32 @@ var n = zip(a, b) --> map(it[0] + it[1]) --> fold(0, a + it)
 
 Same as fold, but with the iterator converted to a tuple where
 `it[0]` is the current result and `it[1]` the actual iterator on the collection.
-Also the first item of the collection is used as initial value - the other items
-are then accumulated to it.
+The first item of the collection is used as initial value - the other items
+are then accumulated to it. This also useful when a type does not define the neutral element for the given operation. E.g. for integers and `+` the neutral element is 0 but for user defined types the neutral element might not exist.
 
 ```nim
 var n = a --> reduce(it[0] + it[1])
+```
+
+There are a few commands that are simply mapped to reduce 
+
+#### max
+Return the maximum value in the collection (`>` is needed)
+#### min
+Return the minimum value in the collection (`<` is needed)
+#### product
+Return the product of the (filtered) elements (`*`)
+#### sum
+Return the sum of the (filtered) elements (`+`).
+
+### indexedReduce
+
+By adding the `indexed` prefix to `reduce` or to the reduce commands above, the index of the last value that was used for the `result` and the actual result of the operation are returned.
+For `sum` and `product` this is not actually helpful but it can be used to find the indices of the `min` and `max` elements.
+
+```nim
+check(@[11,2,0,-2,1,3,-1] --> indexedMin() == (3,-2))
+check(@[11,2,0,-2,1,3,-1] --> indexedMax() == (11,0))
 ```
 
 ### foreach
@@ -269,12 +298,52 @@ a --> foreach(it = it * 2)
 check (a == @[2,4,6]
 ```
 
+### sub
+
+Works on a part of the input collection - `sub`(`fromIndex`,`toIndex`) or drop(`fromIndex`) - similarly to ranges, starting with `fromIndex`  and ending (inclusive) with `endIndex` or runs til the end, when `endIndex` is not given.
+```nim
+check((1..10) --> sub(2,5) --> to(list) == @[2,3,4,5])
+```
+The `endIndex` may be a `BackwardsIndex` like `^1`, but then the collection has to have a `len`.
+`sub` is similar to the `filter` function working on the `idx` variable - however `sub` uses an internal index that is not affected by the outcome of preceeding filtering functions.
+```nim
+# in filter `idx` counts the iterated items
+check(@[-1,2,-3,4,-5,6,-7,8] --> filter(it > 0) --> filter(idx >= 3) == @[4,6,8])
+# sub increments its own index when `it > 0`
+check(@[-1,2,-3,4,-5,6,-7,8] --> filter(it > 0) --> sub(3) == @[8])
+```
+
+Similar commands like `sub` that result in parts of the lists being iterated on or generated are: `drop`, `dropWhile`, `take` and `takeWhile`.
+
+#### drop
+`drop`(`n`) drops n items before working on the collection. This is equivalent to `sub`(`n`).
+#### dropWhile
+`drop`(`cond`) drops the items as long as the condition in `cond` is met - so starts working on the collection when the condition is not fulfilled any more.
+As opposed to `filter` the condition in `drop` is ignored, once it was not true any more.
+```nim
+check(@[-1,2,-3,4,-5] --> dropWhile(it < 0) --> sum() == -2)
+check(@[-1,2,-3,4,-5] --> filter(it >= 0)   --> sum() == 6)
+```
+#### take
+`take`(`n`) works on n items of the collection and then breaking. This is useful for very large (infinite) collections or iterators - the same for `takeWhile`.
+#### takeWhile`
+`takeWhile`(`cond`) works on the collection as long as the condition in `cond` is met. Otherwise it breaks the processing.
+
+
 ### flatten
 
 Working on a collection of iterable items, the flatten function flattens out the elements of the collection.
 
 ```nim
 check(@[@[1,2],@[3],@[4,5,6]] --> flatten() == @[1,2,3,4,5,6])
+```
+
+#### indexedFlatten
+
+Is similar to `flatten`, except that it returns the index inside original sub-lists with the actual content.
+```nim
+check(@[@[1,2],@[3],@[4,5,6]] --> indexedFlatten()            == @[(0,1),(1,2),(0,3),(0,4),(1,5),(2,6)])
+check(@[@[1,2],@[3],@[4,5,6]] --> flatten() --> map((idx,it)) == @[(0,1),(1,2),(2,3),(3,4),(4,5),(5,6)])
 ```
 
 ### combinations
@@ -325,7 +394,7 @@ The result type depends on the function used as last parameter.
 |map            |   +       |     +      |     +      | collType[*]                 |
 |reduce         |           |            |     +      | *                           |
 |sub            |   +       |     +      |     +      | part coll / zeroed array    |
-|zip            |   +       |            |            | map(it): seq[(*,..,*)]      |
+|zip            |   +       |     +      |            | map(it): seq[(*,..,*)]      |
 |to             |           |            |   virtual  | given type                  |
 
 + *: any type depending on given function parameters
