@@ -1,4 +1,4 @@
-import unittest, zero_functional, options, lists, macros, strutils
+import unittest, zero_functional, options, lists, macros, strutils, tables
 
 # different sequences
 let a = @[2, 8, -4]
@@ -52,10 +52,10 @@ proc len(pack: PackWoAdd) : int =
 proc `[]`(pack: PackWoAdd, idx: int) : int  = 
   pack.rows[idx]
   
-## init_zf is used to create the user-defined Pack item
-proc init_zf(a: Pack): Pack =
+## zfInit is used to create the user-defined Pack item
+proc zfInit(a: Pack): Pack =
   Pack(rows: @[])
-proc init_zf(a: PackWoAdd): PackWoAdd =
+proc zfInit(a: PackWoAdd): PackWoAdd =
   PackWoAdd(rows: @[])
 proc initSimpleIter(): SimpleIter =
   SimpleIter(items: @[1,2,3])
@@ -75,6 +75,125 @@ proc g(it: int): int =
     result = it + 2
   else:
     result = it + 1
+
+## Own implementation of inc(num=1) command which adds num to the iterated.
+## This could actually easily be done using `map(it+num)` but this shows an easy example of doing an own mapping.
+proc inlineInc(ext: ExtNimNode) {.compileTime.} =
+  # iterator from the previous command in chain
+  let prevIt = ext.prevItNode()
+  # a new iterator value is created in this function
+  let it = ext.nextItNode()
+  let params = ext.getParams() # get the actual params of inc
+  if (params.len > 1):
+    zfFail("Only 1 or 0 parameters supported for 'inc' command.")
+  let addArg = if (params.len == 0): newIntLitNode(1) else: params[0] # default value: increment by 1
+  # ext.node contains the code that is injected during compilation
+  ext.node = quote:
+    let `it` = `prevIt` + `addArg`
+
+## Own implementation of filterNot(cond) command which is basically the opposite of filter.
+## We try to implement it not refering to filter - just to show how an if condition is handled.
+## The resulting generated node contains a nil statement which is used by the caller to insert
+## the next commands in the chain.
+proc inlineFilterNot(ext: ExtNimNode) {.compileTime.} =
+  let params = ext.getParams() # parameters of filterNot(...)
+  if (params.len != 1):
+    zfFail("'filterNot' needs exactly 1 parameter!")
+  ext.node = quote:
+    if not(`params`[0]):
+      nil 
+  # the nil statement marks the position where the next commands' code will be inserted.
+
+## Own implementation of average command which calculates the arithmetic mean of 
+## sum / count - where count is the number of items and sum is the sum of all items.
+proc inlineAverage(ext: ExtNimNode) {.compileTime.} =
+  let resultIdent = ext.res # access to the actual `result` of the created function
+  let countIdx    = genSym(nskVar, "__count__")
+  let sum         = genSym(nskVar, "__sum__")
+  let prevIt      = ext.prevItNode() # the previous iterator
+  if (ext.getParams().len != 0):
+    zfFail("'average' does not support parameters.")
+  # set the initial counter variables to calculate the average
+  let varInit = quote:
+    `resultIdent` = 0.0 # initialize the result... or infinity maybe? (0 / 0)
+    var `countIdx` = 0
+    var `sum` = 0.0
+  ext.initials.add(varInit) # add to initial section
+  # executed for each item: increment count and calculate the sum
+  ext.node = quote:
+    `countIdx` += 1
+    `sum` += float(`prevIt`)
+  # after the loop: calculate the result
+  let calcResult = quote:
+    if `countIdx` > 0:
+      `resultIdent` = `sum` / float(`countIdx`) 
+  ext.finals.add(calcResult)
+
+# Own implementation of intersect command building the intersection of several collections.
+# Duplicates are not removed.
+proc inlineIntersect(ext: ExtNimNode) {.compileTime.} = 
+  # intersect from the example test case below:
+  # combinations(b,squaresPlusOne()). # combine all elements of a,b...
+  # map(c.it). # get the iterator contents of each combination (indices not relevant here)
+  # filter(it[0] == it[1] and it[0] == it[2]). # this is the trickier one
+  # map(it[0])
+  # parameters for new commands
+  let params = ext.replaceChainBy($Command.combinations, $Command.map, $Command.filter, $Command.map)
+  # parameters for current 'intersect' command: the collections to be intersected
+  let intersectParams = ext.getParams()
+  let c = newIdentNode(zfCombinationsId)
+  let it = newIdentNode(zfIteratorVariableName)
+  let mapParams = quote:
+    `c`.it
+  # build the it[0] == it[1] and ... chain
+  var chain: seq[NimNode] = @[]
+  for idx in (1..intersectParams.len):
+    # it[0] == it[idx]
+    let eqExpr = infix(nnkBracketExpr.newTree(it, newIntLitNode(0)), "==", nnkBracketExpr.newTree(it, newIntLitNode(idx)))
+    if chain.len == 0:
+      chain.add(eqExpr)
+    else:
+      let left = chain[^1]
+      # ... and it[0] == it[idx]
+      chain[^1] = infix(left, "and", eqExpr)
+  if chain.len == 0:
+    zfFail("intersect needs at least 1 parameter!")
+  let mapParams2 = quote:
+    `it`[0]
+  
+  # now insert the command parameters
+  # 1. combinations(b,c,...)
+  for p in intersectParams:
+    params[0].add(p) # use all parameters of `intersect` for the `combinations` command
+  # 2. map(c.it)
+  params[1].add(mapParams)
+  # 3. filter(it[0] == it[1] and ...)
+  params[2].add(chain)
+  # 4. map(it[0])
+  params[3].add(mapParams2)
+
+## Used to implement own commands
+proc extend*(ext: ExtNimNode): ExtNimNode  {.compileTime.} =
+  case ext.label 
+  of "inc":
+    ext.inlineInc()
+  of "filterNot":
+    ext.inlineFilterNot()
+  of "average":
+    ext.inlineAverage()
+  of "intersect":
+    ext.inlineIntersect()
+  else:
+    return nil # checked back in zero-functional: will assert
+  return ext
+
+## Registers the extensions for the user commands during compile time
+macro registerExtension(): untyped =
+  # set compile-time variable in zero-functional
+  zfExtension = extend
+  # the following commands result in sequences if they are the last commands in the chain
+  # hence they should be specifically registered.
+  zfAddSequenceHandlers("intersect", "filterNot", "inc")
 
 ## Macro that checks that the expression compiles
 ## Calls "check"
@@ -460,7 +579,7 @@ suite "valid chains":
   
   test "simple iterator":
     # the type SimpleIter is restricted 
-    # it does not define init_zf to initialize the type nor add (or append) to add elements
+    # it does not define zfInit to initialize the type nor add (or append) to add elements
     # also the `[]=` operator is missing
     let si = initSimpleIter()
     let si2 = initSimpleIter()
@@ -602,3 +721,73 @@ suite "valid chains":
     # drop 11..13, then drop the 1=14, then take until 26
     check((11..222) --> dropWhile((it mod 7) > 0).drop(1).takeWhile((it mod 13) != 1) == @[15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26])
     
+  ## Creates an inline iterator as in-between result. 
+  ## This iterator cannot be moved around, but is useful to save intermediate results.
+  test "create iterator function":
+    type Person = ref object
+      name: string
+      height: int
+    let inputData = [{"name": "Mary", "height": "162"}, 
+                     {"name": "Hans", "height": "184"}, 
+                     {"name": "Jonas", "height": "0"},
+                     {"name": "Wanda", "height": "136"},
+                     {"name": "Joey",  "height": "158"}]
+    inputData --> 
+      map(it.newTable).
+      map(Person(name: it["name"], height: parseInt(it["height"]))).
+      createIter(persons) # creates an iterator function named persons
+    # now create the heights which is needed twice to calculate its average value
+    persons() --> 
+      map(it.height).
+      filter(it > 0).
+      createIter(heights)
+    # the heights() can now be accessed several times (to determine the count and the sum of heights)
+    let count = heights() --> count()
+    let averageHeight = if (count == 0): float(0) else: float((heights() --> sum()) / count)
+    check(count == 4) # only 4 valid height values
+    check(averageHeight == 160.0)
+
+    (1..3) --> map(it) --> createIter(a)
+    # auto type detection is limited when working with iterator functions on the left side
+    reject(a() --> map(it))
+    # the result type cannot be guessed automatically - so set it explicitly
+    accept(a() --> to(seq[int]) == @[1,2,3])
+
+  ## Combines several collections to build an intersection.
+  test "combinations of several collections":
+    (1..10) --> map(2*it-1) --> createIter(a) # seq of odd numbers 1..19
+    let b = @[1,2,3,5,7,11,13,17,19] # some prime numbers
+    (1..10) --> map(it*it+1) --> createIter(squaresPlusOne)
+    # create an iterfunction squaresPlusOne - don't forget to add () !
+
+    let intersect = 
+      a() --> combinations(b,squaresPlusOne()). # combine all elements of a,b and squarePlusOne
+              map(c.it). # get the iterator contents of each combination (indices not relevant here)
+              filter(it[0] == it[1] and it[0] == it[2]). # get all combinations where the elements of each collection are equal
+              map(it[0]). # and use the first element
+              to(seq[int]) # output type with a() on left side has to be supplied
+    check(intersect == @[5,17])
+
+  ## Example that uses own extensions: `average`, `intersect`, `inc` and `filterNot`. 
+  ## `intersect` uses the same implementation as in the previous test.
+  test "register own extension":
+    let a = @[1,4,3,2,5,9]
+    let b = @[7,1,8,9,4]
+    # the own extensions are rejected when they have not been registered yet
+    reject(a --> average() == 4.0)
+    reject(a --> intersect(b) == @[1,4,9])
+    reject(a --> inc(2) == @[3,6,5,4,7,11])
+    reject(a --> filterNot(it mod 4 == 1) == @[4,3,2])
+
+    # now register the extension that supports the above functions
+    registerExtension()
+    
+    # build the average value of a
+    check(a --> average() == 4.0)
+    # get all elements that are both in a and b
+    check(a --> intersect(b) == @[1,4,9])
+    # increment a by 1 and by 2
+    check(a --> inc() ==  @[2,5,4,3,6,10])
+    check(a --> inc(2) == @[3,6,5,4,7,11])
+    # get all elements that are not 1 when modulo 4 is applied
+    check(a --> filterNot(it mod 4 == 1) == @[4,3,2])
