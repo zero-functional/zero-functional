@@ -285,7 +285,7 @@ As in-between element the code is simply executed on each element.
 #### changing in-place
 The iterator content may be changed in `foreach` resulting in changing
 the original collection.
-However there are a few restrictions (see test.nim](test.nim#L455)):
+However there are a few restrictions [see test.nim](test.nim#L455):
 + the `[]=` operator has to be available for the underlying collection type (exception: the std LinkedList types)
 + functions that alter the collection elements may not be used in the chain before (e.g. `map` is not allowed, but `filter` is).
 
