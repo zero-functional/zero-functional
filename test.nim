@@ -76,6 +76,11 @@ proc g(it: int): int =
   else:
     result = it + 1
 
+type
+  ## Sample commands that are used to extend zero-functional
+  ExtCommand = enum
+      inc, filterNot, average, intersect
+
 ## Own implementation of inc(num=1) command which adds num to the iterated.
 ## This could actually easily be done using `map(it+num)` but this shows an easy example of doing an own mapping.
 proc inlineInc(ext: ExtNimNode) {.compileTime.} =
@@ -157,7 +162,7 @@ proc inlineIntersect(ext: ExtNimNode) {.compileTime.} =
       # ... and it[0] == it[idx]
       chain[^1] = infix(left, "and", eqExpr)
   if chain.len == 0:
-    zfFail("intersect needs at least 1 parameter!")
+    zfFail("'intersect' needs at least 1 parameter!")
   let mapParams2 = quote:
     `it`[0]
   
@@ -172,28 +177,11 @@ proc inlineIntersect(ext: ExtNimNode) {.compileTime.} =
   # 4. map(it[0])
   params[3].add(mapParams2)
 
-## Used to implement own commands
-proc extend*(ext: ExtNimNode): ExtNimNode  {.compileTime.} =
-  case ext.label 
-  of "inc":
-    ext.inlineInc()
-  of "filterNot":
-    ext.inlineFilterNot()
-  of "average":
-    ext.inlineAverage()
-  of "intersect":
-    ext.inlineIntersect()
-  else:
-    return nil # checked back in zero-functional: will assert
-  return ext
-
 ## Registers the extensions for the user commands during compile time
 macro registerExtension(): untyped =
-  # set compile-time variable in zero-functional
-  zfExtension = extend
-  # the following commands result in sequences if they are the last commands in the chain
+  # the commands intersect, filterNot and inc result in sequences if they are the last commands in the chain
   # hence they should be specifically registered.
-  zfAddSequenceHandlers("intersect", "filterNot", "inc")
+  zfCreateExtensionSeq(ExtCommand, @[ExtCommand.intersect, ExtCommand.filterNot, ExtCommand.inc])
 
 ## Macro that checks that the expression compiles
 ## Calls "check"
@@ -206,10 +194,29 @@ macro accept*(e: untyped): untyped =
     else:
       discard
 
-## Checks that the given expression is rejected by the compiler.
-template reject*(e) =
-  static: assert(not compiles(e))
+macro compilesMsg(e: untyped): untyped =
+  let r = e.repr
+  result = quote:
+    warning("expression '$1' marked as `reject` did compile!" % `r`)
 
+macro checkRejectMsg(e: untyped, msg: static[string], cmp: static[string]) : untyped =
+  result = quote:
+    if `cmp` != `msg`:
+      let errMsg = "reject check failed:\n expected: '$1',\n      got: '$2'" % [`msg`, `cmp`]
+      warning(errMsg)
+    else:
+      discard
+      
+## Checks that the given expression is rejected by the compiler.
+## When an assert (with msg) happens: the msg has to be the same.
+template reject*(e: untyped, msg: static[string] = "") =
+  static: # [sic!] - need several static sections here [why?!]
+    when (compiles(e)):
+      compilesMsg(e)
+  static:
+    checkRejectMsg(e, msg, zfGetLastFailure())
+
+    
 ## This is kind of "TODO" - when an expression does not compile due to a bug
 ## and it actually should compile, the expression may be surrounded with 
 ## `check_if_compile'. This macro will complain to use `check` when the expression
@@ -230,7 +237,7 @@ suite "valid chains":
 
   test "basic filter":
     check(a --> filter(it > 0) == @[2, 8])
-
+    
   test "basic zip":
     check((zip(a, b, c) --> filter(it[0] > 0 and it[2] == "one")) == @[(8, 1, "one")])
 
@@ -532,7 +539,7 @@ suite "valid chains":
     let fSeq = @[1,2,3,4,5,6]
     
     # flatten defaults to seq output if not explicitly set to the output format (except DoublyLinkedList)
-    reject((fArray --> flatten()) == [1,2,3,4,5,6])
+    reject(fArray --> flatten() == [1,2,3,4,5,6])
     accept((fArray --> flatten()) == fSeq)
     # array dimensions must be explicitly given
     reject((fArray --> flatten() --> to(array)) == [1,2,3,4,5,6]) 
@@ -547,7 +554,8 @@ suite "valid chains":
   test "rejected missing add function":
     let p2 = PackWoAdd(rows: @[0,1,2,3])
     # PackWoAdd as iterable does not define the add method (or append) - hence this won't compile
-    reject((p2 --> filter(it != 0)).rows ==  @[1,2,3]) 
+    reject((p2 --> filter(it != 0)).rows ==  @[1,2,3], 
+            "Need either 'add' or 'append' implemented in 'PackWoAdd' to add elements") 
     # forced to seq -> compiles
     accept((p2 --> filter(it != 0) --> to(seq)) == @[1,2,3])
     # also when using map which will lead to seq output
@@ -556,10 +564,11 @@ suite "valid chains":
 
   test "rejected wrong result type":
     # a contains int and cannot be mapped to seq[string] without $ operator
-    reject((a --> filter(it > 2) --> to(seq[string])) == @["8"])
+    reject((a --> filter(it > 2) --> to(seq[string])) == @["8"], 
+            "Result type 'seq[string]' and added item of type 'int' do not match!")
 
   test "rejected 'to' with an integral result type":
-    reject(a --> exists(it < 0) --> to(list))
+    reject(a --> exists(it < 0) --> to(list), "'to' can only be used with list results - last arg is 'exists'")
     accept(a --> map(it) --> to(seq) == a)
 
   test "SinglyLinkedList reversing elements":
@@ -601,15 +610,18 @@ suite "valid chains":
     discard(e) # just check it can be assigned
     accept(d --> to(seq) == @[2,4,6])
 
-    reject(zip(si,si2) --> map($it)) # zip also needs the [] operator
-    reject(si --> combinations() --> all(c.it[0] < c.it[1]))
+    reject(zip(si,si2) --> map($it) != nil, "need to provide an own implementation for mkIndexable(SimpleIter)") # zip also needs the [] operator
+    reject(si --> combinations() --> all(c.it[0] < c.it[1]), "Only index with len types supported for combinations")
     accept(d --> combinations() --> map(c.it) --> all(it[0] < it[1]))
 
   test "zip with simpleIter":
     let si = initSimpleIter()
-    reject(zip(si, a) --> map(it[0]+it[1]) == @[3,10,-1]) # si needs an index
+    # si needs access with []
+    reject(zip(si, a) --> map(it[0]+it[1]) == @[3,10,-1], 
+            "need to provide an own implementation for mkIndexable(SimpleIter)") 
     accept(si --> map((it, a[idx])) -->  map(it[0]+it[1]) == @[3,10,-1]) # this will work
-    reject(zip(a,si) --> map(it)) # si needs `[]` and high - we do that now...
+    # si needs `[]` and high - we do that now...
+    reject(zip(a,si) --> map(it), "need to provide an own implementation for mkIndexable(SimpleIter)") 
     proc `[]`(si: SimpleIter, idx: int) : int = si.items[idx]
     proc `high`(si: SimpleIter) : int = si.items.high()
     check(zip(a,si) --> map(it[0]+it[1]) == @[3,10,-1])
@@ -627,11 +639,12 @@ suite "valid chains":
     var my_seq2 = @[1,2,3,4]
     my_seq --> foreach(it = it + 1)
     check(my_seq == @[3,4,6,8])
-    reject(my_seq --> map(it) --> foreach(it = it + 1))
-    reject(my_seq --> indexedMap(it) --> foreach(it[1] = it[1] + 1))
-    reject(my_seq --> combinations() --> foreach(it = it + 1))
-    reject(my_seq --> flatten() --> foreach(it = it + 1))
-    reject(zip(my_seq,my_seq2) --> foreach(it[0] = it[0] + 1))
+    const errMsg = "Cannot change list in foreach that has already been altered with: map, indexedMap, combinations, flatten or zip!"
+    reject(my_seq --> map(it) --> foreach(it = it + 1), errMsg)
+    reject(my_seq --> indexedMap(it) --> foreach(it[1] = it[1] + 1), errMsg)
+    reject(my_seq --> combinations() --> foreach(it = it + 1), errMsg)
+    reject(my_seq --> flatten() --> foreach(it = it + 1), errMsg)
+    reject(zip(my_seq,my_seq2) --> foreach(it[0] = it[0] + 1), errMsg)
     check(my_seq == @[3,4,6,8])
     discard my_seq2
 
@@ -663,7 +676,8 @@ suite "valid chains":
     let up = UsePack(packs: @[p1, p2])
     accept(up --> map(sp.show(it)) is seq[string])
     # internally asserted, but initially a compiler problem
-    reject(up --> map(sp.show(it)) --> to(list) is DoublyLinkedList[string])
+    reject(up --> map(sp.show(it)) --> to(list) is DoublyLinkedList[string], 
+            "Result type 'DoublyLinkedList' and added item of type 'string' do not match!")
     accept(up --> map(sp.show(it)) --> to(seq) is seq[string])
     accept(up --> map(sp.show(it)) --> to(list[string]) is DoublyLinkedList[string])
     accept(up --> map(sp.show(it)) --> to(seq[string]) is seq[string])
@@ -768,18 +782,32 @@ suite "valid chains":
               to(seq[int]) # output type with a() on left side has to be supplied
     check(intersect == @[5,17])
 
+  ## Remove double entries from a collection. Could be used to extend `intersect`.
+  test "complex function remove doublettes":
+    let a = @[1,2,1,1,3,2,1,1,4]
+    check(a --> combinations(a). # combine with itself - all elements
+              # this is the tricky one: remove later elements that already are in the list
+              # this actually translates in the inner for loop of combinations as:
+              # if c.idx[0] > c.idx[1] and c.it[0] == c.it[1]: break
+              takeWhile(not(c.idx[0] > c.idx[1] and c.it[0] == c.it[1])). 
+              # go back to the original elements
+              filter(c.idx[0] == c.idx[1]). 
+              map(c.it[0])  ==
+                               @[1,2,3,4])
+
   ## Example that uses own extensions: `average`, `intersect`, `inc` and `filterNot`. 
   ## `intersect` uses the same implementation as in the previous test.
   test "register own extension":
     let a = @[1,4,3,2,5,9]
     let b = @[7,1,8,9,4]
     # the own extensions are rejected when they have not been registered yet
-    reject(a --> average() == 4.0)
-    reject(a --> intersect(b) == @[1,4,9])
-    reject(a --> inc(2) == @[3,6,5,4,7,11])
-    reject(a --> filterNot(it mod 4 == 1) == @[4,3,2])
+    const errorMsg = " is unknown, you could provide your own implementation! See `zfCreateExtension` and `zfCreateExtensionSeq`!"
+    reject(a --> average() == 4.0, "average" & errorMsg)
+    reject(a --> intersect(b) == @[1,4,9], "intersect" & errorMsg)
+    reject(a --> inc(2) == @[3,6,5,4,7,11], "inc" & errorMsg)
+    reject(a --> filterNot(it mod 4 == 1) == @[4,3,2], "filterNot" & errorMsg)
 
-    # now register the extension that supports the above functions
+    # now register the extension that supports the above functions (also set the new sequence handlers)
     registerExtension()
     
     # build the average value of a
@@ -791,3 +819,8 @@ suite "valid chains":
     check(a --> inc(2) == @[3,6,5,4,7,11])
     # get all elements that are not 1 when modulo 4 is applied
     check(a --> filterNot(it mod 4 == 1) == @[4,3,2])
+
+    # check own errors
+    reject(a --> filterNot(it != 0, it != 1), "'filterNot' needs exactly 1 parameter!")
+    reject(a --> inc(1,2,3), "Only 1 or 0 parameters supported for 'inc' command.")
+    reject(a --> intersect(), "'intersect' needs at least 1 parameter!")

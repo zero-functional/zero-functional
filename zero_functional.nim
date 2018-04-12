@@ -92,24 +92,104 @@ static: # need to use var to be able to concat
   SEQUENCE_HANDLERS.incl(FORCE_SEQ_HANDLERS)
   HANDLERS.incl(SEQUENCE_HANDLERS)
 
+## Can be read in test implementation
+var lastFailure {.compileTime.} : string = "" 
+
+proc zfGetLastFailure*() : string {.compileTime.} = 
+  result = lastFailure
+  lastFailure = ""
+
 ## Called when some failure is detected during macro processing. 
 proc zfFail*(msg: string) {.compileTime.} =
+  lastFailure = msg
   assert(false, ": " & msg)
     
 ## This is the default extension complaining when a given function was not found.
 proc extendDefault(ext: ExtNimNode) : ExtNimNode {.compileTime.} =
-  zfFail("$1 is unknown, implement set 'zfExtension' to 'proc zfExtend(ext: ExtNimNode)' in a macro and provide your own implementation!" % ext.node[0].repr)
+  zfFail("$1 is unknown, you could provide your own implementation! See `zfCreateExtension` and `zfCreateExtensionSeq`!" % ext.node[0].repr)
 
 ## If you want to extend `zero_functional` assign this variable in your own code to a function with the given signature.
 ## The assignment has to be done during compile time - so for instance in a macro. 
 ## See `test.nim` for an example of how to do that.
-var zfExtension* {.compileTime.} : proc(ext: ExtNimNode): ExtNimNode = extendDefault
+var zfExtension {.compileTime.} : proc(ext: ExtNimNode): ExtNimNode = extendDefault
 
+## Set the extension method.
+## The extension method will be automatically created and registered using `zfRegister` or `zfRegisterExt`
+proc zfSetExtension*(extension: proc(ext: ExtNimNode): ExtNimNode) {.compileTime.} =
+  zfExtension = extension
+
+## Register sequence handlers for an extension.
+proc zfAddSequenceHandlers*(seqHandlers: seq[string]) {.compileTime.} = 
+  SEQUENCE_HANDLERS.incl(seqHandlers.toSet)
+
+## same as zfAddSequenceHandlers(seq[string]) added for convenience
 proc zfAddSequenceHandlers*(seqHandlers: varargs[string]) {.compileTime.} = 
   SEQUENCE_HANDLERS.incl(seqHandlers.toSet)
 
+## Find a node given its kind and - optionally - its content.
+proc findNode*(node: NimNode, kind: NimNodeKind, content: string = nil) : NimNode =
+  if node.kind == kind and (content == nil or content == $node):
+    return node
+  for child in node:
+    let res = child.findNode(kind, content)
+    if res != nil:
+      return res
+  return nil
+
+## Creates the extension function
+proc createExtensionProc(name: string, cmdSeq: seq[string]): NimNode = 
+  let procName = newIdentNode("__extend__" & name)
+  let ext = newIdentNode("ext")
+  let enumName = newIdentNode(name)
+  let resultIdent = newIdentNode("result")
+  let procDef = quote:
+    proc `procName`(`ext`: ExtNimNode): ExtNimNode  {.compileTime.} =
+      let cmd = `ext`.label.toEnum(`enumName`)
+      if cmd == none(`enumName`):
+        return nil # will assert
+      else:
+        `resultIdent` = `ext`
+        case cmd.get()
+    zfSetExtension(`procName`)
+  let caseStmt = procDef.findNode(nnkCaseStmt)
+  for cmd in cmdSeq:
+    let cmdName = newIdentNode("inline" & cmd.capitalizeAscii())
+    let cmdEnum = newIdentNode(cmd)
+    let ofBranch = quote:
+      case dummy
+      of `cmdEnum`:
+        `ext`.`cmdName`()
+    caseStmt.add(ofBranch.findNode(nnkOfBranch))
+  result = procDef
+
+## Convert enum to seq[string]
+proc toStringSeq*[T:typedesc[enum]](t: T): seq[string] = 
+  result = @[]
+  for it in T:
+    result.add($it)
+
+## Used to delegate the string content of an enum to the register creation procedure.
+macro delegateRegister(name: static[string], td: static[seq[string]]): untyped =
+  result = createExtensionProc(name, td)
+
+## Create a delegate function for the given enum.
+## For each member `m` of that enum, the function `inlineM` has to be created.
+macro zfCreateExtension*(cmdEnum: untyped): untyped =
+  result = quote:
+    delegateRegister($`cmdEnum`.type, `cmdEnum`.toStringSeq())
+
+## Create a delegate function and register the commands that can create sequence output.
+macro zfCreateExtensionSeq*(cmdEnum: untyped, seqCommand: untyped): untyped = 
+  result = quote:
+    zfCreateExtension(`cmdEnum`)
+    if `seqCommand`.len > 0:
+      var seqHandlers: seq[string] = @[]
+      for it in `seqCommand`:
+        seqHandlers.add($it)
+      zfAddSequenceHandlers(seqHandlers)
+
 ## Converts the id-string to the given enum type.
-proc toEnum[T:typedesc[enum]](key: string; t:T): auto =
+proc toEnum*[T:typedesc[enum]](key: string; t:T): auto =
   result = none(t)
   for it in t:
     if $it == key:
@@ -244,16 +324,6 @@ proc replace(node: NimNode, searchNode: NimNode, replNode: NimNode): NimNode =
   elif node.kind == searchNode.kind and node.label == searchNode.label:
     result = replNode
 
-## Find a node given its kind and - optionally - its content.
-proc findNode(node: NimNode, kind: NimNodeKind, content: string = nil) : NimNode =
-  if node.kind == kind and (content == nil or content == $node):
-    return node
-  for child in node:
-    let res = child.findNode(kind, content)
-    if res != nil:
-      return res
-  return nil
-
 ## Searches for a given node type and returns the node and its path (indices) in the given root node.
 ## Search type is breadth first.
 proc findNodePath(node: NimNode, kind: NimNodeKind, content: string = nil) : (NimNode,seq[int]) = 
@@ -277,7 +347,7 @@ proc apply(node: NimNode, path: seq[int], newNode: NimNode): NimNode =
 
 ## Helper that gets nnkStmtList and removes a 'nil' inside it - if present.
 ## The nil is used as placeholder for further added code.
-proc getStmtList(node: NimNode, removeNil = true): NimNode =
+proc getStmtList*(node: NimNode, removeNil = true): NimNode =
   var child = node
   while child.len > 0:
     child = child.last
@@ -334,7 +404,7 @@ proc createAutoProc(args: NimNode, isSeq: bool, resultType: string, td: string):
     let iterName = newIdentNode(args.last[1].label)
     args.del(args.len-1)
     if not (args.last[0].label in SEQUENCE_HANDLERS):
-      zfFail("'to' can only be used with list results - last arg is '" & args.last[0].label & "'")
+      zfFail("'iter' can only be used with list results - last arg is '" & args.last[0].label & "'")
     autoProc = quote:
       iterator `iterName`(): auto = 
         nil
