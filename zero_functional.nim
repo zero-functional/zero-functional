@@ -226,8 +226,8 @@ proc zfInit*[T, U](a: Iterable[T], handler: proc(it: T): U): seq[U] =
 ## General zfInit for iterable types.
 ## This should be overwritten for user defined types because otherwise the default = seq[T] on will be created.
 proc zfInit*[T](a: Iterable[T]): Iterable[T] =
-  proc ident(it: T): T = it
-  zfInit(a, ident)
+  proc zfIdent[T](it: T): T = it
+  zfInit(a, zfIdent)
 
 proc createCombination*[A,T](it: array[A,T], idx: array[A,int]): Combination[A,T] =
   result = Combination[A,T](it: it, idx: idx)
