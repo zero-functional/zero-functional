@@ -1367,8 +1367,9 @@ proc iterHandler(args: NimNode, debug: bool, td: string): NimNode {.compileTime.
   var defineIdxVar = not hasMinHigh and not isIter
   var needsIndexVar = false
 
-  if ((not isIter and (resultType != nil and resultType.startswith("array") or (resultType == nil and td.startswith("array")))) or
-    nil != args.findNode(nnkIdent, zfIndexVariableName)):
+  if ((not isIter and (resultType != nil and resultType.startswith("array") or 
+      (resultType == nil and td.startswith("array")))) or
+      args.findNode(nnkIdent, zfIndexVariableName) != nil):
       needsIndexVar = true
 
   if not defineIdxVar:
