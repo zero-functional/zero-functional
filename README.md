@@ -72,7 +72,17 @@ for it in items(result3):
     return false
 ```
 
-## rationale
+
+## Installation
+
+```
+nimble install zero_functional
+```
+
+Note: the correct name is `zero_functional` (with underscore).
+
+
+## Rationale
 
 Functional style handling of sequences is awesome, and nim is supposed to be fast and smart.
 Allocating new sequences on each method in chains can be extremely wasteful and there are not a lot
