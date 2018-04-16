@@ -620,6 +620,7 @@ proc addElem*(ext: ExtNimNode, addItem: NimNode): NimNode {.compileTime.} =
   else:
     result = nil
 
+## Helper for Zero-DSL: quote all used variables that are defined somewhere in the created function.
 proc addQuotes(a: NimNode, quotedVars: Table[string,string]) =
   if a.kind != nnkAccQuoted and (a.kind != nnkCall or a[0].label != "pre"):
     for i in 0..<a.len:
@@ -629,21 +630,23 @@ proc addQuotes(a: NimNode, quotedVars: Table[string,string]) =
       else:
         child.addQuotes(quotedVars)
 
-proc replaceNodeLR(a: NimNode, label: string, repl: NimNode, left: bool) : bool =
+## Helper for Zero-DSL: replace all 'it' nodes by the next iterator (in let expressions when defining a new iterator)
+## or by previous iterator. 
+proc replaceIt(a: NimNode, repl: NimNode, left: bool) : bool =
   result = false 
   for i in 0..<a.len:
     let child = a[i]
     if left and (child.kind == nnkExprEqExpr or child.kind == nnkIdentDefs):
-      if child[0].kind == nnkIdent and child[0].label == label:
+      if child[0].kind == nnkIdent and child[0].label == zfIteratorVariableName:
         child[0] = repl
         return true
 
     elif not left:
-      if child.kind == nnkIdent and child.label == label:
+      if child.kind == nnkIdent and child.label == zfIteratorVariableName:
         a[i] = repl
         result = true
 
-    if child.replaceNodeLR(label, repl, left):
+    if child.replaceIt(repl, left):
       if left:
         return true # only once per left node
       result = true
@@ -680,21 +683,50 @@ proc replaceVarDefs(a: NimNode, quotedVars: var Table[string,string], preSection
       if c.len > 0:
         result.add(c)
 
+## Parse the given Zero-DSL and create an inlineXyz function.
+## E.g. `zf_inline index(): ...` will create `proc inlineIndex(ext: ExtNimNode)`.
+## The DSL parses the content for the following sections:
+## - pre: prepare used variables - also manipulated ext, when default behaviour is not sufficient.
+##        as zero DSL has limitations when creating code the pre-section can be used to 
+##        circumvent these deficiencies
+## - init: initialize variables used in the loop
+## - loop: the main part that is running within the loop
+## - delegate: delegates this function call to another function (created with zero-DSL) - possibly with changed parameters
+## - end: section added at the end of the loop
+## - final: section added at the end of the function
+##
+## So in general it looks like this - in the overall generated code
+## <pre-section> with definitions - referenced in the other sections
+##
+## # init section
+## var myVar = 0
+## # the actual loop
+## for it in a:
+##   # added loop section somewhere here
+##   ...
+##   # end loop around here
+##   ...
+## # final section
 proc zeroParse(header: NimNode, body: NimNode): NimNode =
   if header.kind == nnkCall and body.kind == nnkStmtList:
     var funDef = header
     let funName = funDef.label
+    # when this function has been called with zf_inline_call the "__call__" has to be stripped for the actual zero function name
     if funName.endswith("__call__"):
       let n = funName[0..^9]
       if not (n in zfFunctionNames):
         zfFunctionNames.add(n)
     else:
       zfFunctionNames.add(funName)
-    let label = newIdentNode("inline" & funName.capitalizeAscii())
+
+    let procName = newIdentNode("inline" & funName.capitalizeAscii())
+    # parameters given to the zero function
     var paramSection = nnkStmtList.newTree()
+    # referenced variables are added here
+    # this contains common definitions for all sections
     let letSection = nnkStmtList.newTree()
+    # reference to the 'ext' parameter of the created proc
     let ext = newIdentNode("ext")
-    var procDef: NimNode = nil
     var quotedVars = initTable[string,string]()
     letSection.add(body.replaceVarDefs(quotedVars))
     let numArgs = funDef.len-1      
@@ -711,10 +743,6 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
       paramSection.add(chk)
 
     if funDef.kind == nnkCall:
-      if funDef[0].kind == nnkCall:
-        procDef = funDef
-        funDef = funDef[0]
-
       for i in 1..numArgs:
         var defaultVal: NimNode = nil
         var symName = funDef[i].label
@@ -767,14 +795,14 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
       quotedVars[zfIndexVariableName] = "idxIdent"
     
     # replace it in 'it = ...' with `nextIt` and create the next iterator
-    if body.replaceNodeLR("it", nnkAccQuoted.newTree(newIdentNode("nextIdent")), true):
+    if body.replaceIt(nnkAccQuoted.newTree(newIdentNode("nextIdent")), true):
       let nextIt = newIdentNode("nextIdent")
       let q = quote:
         let `nextIt` = `ext`.nextItNode()
       letSection.add(q)
     
     # access the previous iterator replacing 'it'
-    if body.replaceNodeLR("it", nnkAccQuoted.newTree(newIdentNode("prevIdent")), false):
+    if body.replaceIt(nnkAccQuoted.newTree(newIdentNode("prevIdent")), false):
       let prev = newIdentNode("prevIdent")
       let q = quote:
         let `prev` = `ext`.prevItNode()
@@ -782,16 +810,10 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
     
     # create the proc
     let q = quote:
-      proc `label`( `ext`: ExtNimnode) {.compileTime.} =
+      proc `procName`( `ext`: ExtNimnode) {.compileTime.} =
         `paramSection`
         `letSection`
         nil
-
-    if procDef != nil:
-      let paramSection = q.findNode(nnkFormalParams)
-      # second parameterset are actual parameters
-      for i in 1..<procDef.len:
-        paramSection.add(newIdentDefs(procDef[i][0], newEmptyNode(), procDef[i][1]))
 
     let code = q.getStmtList()
 
@@ -1168,7 +1190,7 @@ proc inlineCombinations(ext: ExtNimNode) {.compileTime.} =
         pre:
           let itlist = newIdentNode(listIteratorName)
         loop:
-          var itListInner = `itList`.next # todo
+          var itListInner = `itList`.next # todo - backticks should not be needed here! (but we get: undeclared field next)
           var idxInner = idx
           while itListInner != nil:
             let `itCombo` = createCombination([it, itListInner.value], [idx, idxInner])
@@ -1705,6 +1727,3 @@ macro `-->>`*(a: untyped, b: untyped): untyped =
       delegateArrow(type(`a`), `a`, `b`, true)
   else:
     result = delegateMacro(a, b, true, "seq")
-
-#assert(zfFunctionNames.len == 0, "All inline commands have to be created before registration")
-
