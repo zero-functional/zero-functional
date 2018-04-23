@@ -141,7 +141,7 @@ This is needed for `zip`, `combinations` and `foreach` when changing elements.
 
 For the creation of a generic type as result, the type needs to implement
 ```nim
-proc init_zf(a: MyType): MyType =
+proc zfInit(a: MyType): MyType =
   MyType(...)
   # the `a` is not actually used but is needed for overloading.
 ```
@@ -398,12 +398,13 @@ check(@[@[1,2],@[3],@[4,5,6]] --> flatten() --> map((idx,it)) == @[(0,1),(1,2),(
 ### combinations
 
 Combines each item of the original collection with each other - the resulting variable is `c`, with `c.it` as an array of 2 containing the combined iterator values and `c.idx` containing their indices.
-`combinations` is not allowed as the last argument.
 
 ```nim
 # find the indices of the elements in the collection, where the diff to the other element is 1
 check(@[11,2,7,3,4] --> combinations() --> filter(abs(c.it[1]-c.it[0]) == 1) --> map(c.idx) == @[[1,3],[3,4]])
 #          ^   ^ ^
+# combine all elements of first collection with elements of second collections
+check(@[1,2,3] --> combinations(@[4,5]) --> map(c.it) == @[[1,4],[1,5],[2,4],[2,5],[3,4],[3,5]])
 ```
 
 
@@ -422,6 +423,50 @@ let l2: DoublyLinkedList[string] = l
 echo(l2)
 ```
 
+### iter
+
+When using `iter(name)` as last function then an iterator `name` is created and which can be used for further processing with zero-functional with only a small overhead.
+Similar to `to` this is also a virtual function which is internally replaced and only used to check the output type.
+
+```nim
+# filter all lines containing the word error in the iterator
+myFileIterator --> filter("error" in it) --> iter(errorLines)
+if debug:
+  errorLines() --> echo(it) # () must be used when working with iterators
+```
+
+## Extending zero-functional
+
+*This feature is still in work and will be made simpler to work with soon.*
+
+Extending zero-functional with own functions is probably more complicated than with other fp-libraries as the functions have to be implemented with macros producing imperative code. 
+Some good examples - 2 very basic and 2 more complicated - can be found in [test.nim: registerExtension](test.nim). In a nutshell the following needs to be done:
+Define an `enum` where all commands are added - register them using `zfCreateExtensionSeq` or `zfCreateExtension` and implement all `inline` functions accordingly.
+```nim
+type
+  ## Sample commands that are used to extend zero-functional
+  ExtCommand = enum
+      inc, filterNot, average, intersect
+	  
+# the commands intersect, filterNot and inc result in sequences if they are the last commands in the chain
+# hence they should be specifically registered.
+zfCreateExtensionSeq(ExtCommand, @[ExtCommand.intersect, ExtCommand.filterNot, ExtCommand.inc])
+```
+
+The `inline`-implementations should follow certain rules. 
+- `ext: ExtNimNode` as parameter
+- ExtNimNode should be used when implementing the functions with some helpers:
+  - `ext.node` = the actual code being generated inside the current block
+  - `ext.initials` = the initialization code for variable definitions
+  - `ext.endLoop` = code that can be inserted at the end of the loop
+  - `ext.finals` = code after the loop - e.g. to calculate a result
+  - `ext.res` = access to the function's result
+  - `ext.prevItNode()` = access to the iterator generated in the previous statement or loop
+  - `ext.nextItNode()` = generates a new iterator for the current block. This is the (intermediate) result of the current operation that can be used with the next function
+  - `ext.getParams()` = `seq` of all parameters to the current function
+  - `ext.replaceChainBy(...)` = helper function for more complicated commands that can be composed by existing functions
+- check of parameters / number of parameters has to be done in the implementation (e.g. by using ext.getParams())
+- use `zfFail()` if any checks fail
 
 ## Overview Table
 
@@ -430,7 +475,7 @@ The result type depends on the function used as last parameter.
 | Command       | 1st Param | in-between | Last Param | Result Type                 |
 | ------------- | --------- | ---------- | ---------- | --------------------------- |
 |all            |           |            |     +      | bool                        |
-|combinations   |   +       |            |            | map(it): coll[Combination]  |
+|combinations   |   +       |    (+)     |    (+)     | coll[Combination]           |
 |exists         |           |            |     +      | bool                        |
 |filter         |   +       |     +      |     +      | part coll / zeroed array    |
 |find           |           |            |     +      | int                         |
@@ -439,16 +484,16 @@ The result type depends on the function used as last parameter.
 |foreach        |   +       |     +      |     +      | void                        |
 |index          |           |            |     +      | int                         |
 |indexedMap     |   +       |     +      |     +      | seq[(int,*)]                |
+|iter           |           |            |  virtual   | iterator of given type      |
 |map            |   +       |     +      |     +      | collType[*]                 |
 |reduce         |           |            |     +      | *                           |
 |sub            |   +       |     +      |     +      | part coll / zeroed array    |
-|zip            |   +       |     +      |            | map(it): seq[(*,..,*)]      |
+|zip            |   +       |     +      |     +      | seq[(*,..,*)]               |
 |to             |           |            |   virtual  | given type                  |
 
 + *: any type depending on given function parameters
 + coll: is the input collection
 + collType is the input collection type (without template argument)
-+ map(it): some functions are not allowed as last parameter but using map(it) will yield the given output
 + to: is a "virtual" function, can only be given as last argument, but does not count as last argument.
 
 ## Debugging using `-->>`
