@@ -76,112 +76,90 @@ proc g(it: int): int =
   else:
     result = it + 1
 
-type
-  ## Sample commands that are used to extend zero-functional
-  ExtCommand = enum
-      inc, filterNot, average, intersect
-
 ## Own implementation of inc(num=1) command which adds num to the iterated.
 ## This could actually easily be done using `map(it+num)` but this shows an easy example of doing an own mapping.
-proc inlineInc(ext: ExtNimNode) {.compileTime.} =
-  # iterator from the previous command in chain
-  let prevIt = ext.prevItNode()
-  # a new iterator value is created in this function
-  let it = ext.nextItNode()
-  let params = ext.getParams() # get the actual params of inc
-  if (params.len > 1):
-    zfFail("Only 1 or 0 parameters supported for 'inc' command.")
-  let addArg = if (params.len == 0): newIntLitNode(1) else: params[0] # default value: increment by 1
-  # ext.node contains the code that is injected during compilation
-  ext.node = quote:
-    let `it` = `prevIt` + `addArg`
+zf_inline inc(add=1):
+  loop: # code that is added inside the loop
+    let it = it + add # create new iterator with `let it` and use the previous iterator `it` for it. 
 
 ## Own implementation of filterNot(cond) command which is basically the opposite of filter.
 ## We try to implement it not refering to filter - just to show how an if condition is handled.
 ## The resulting generated node contains a nil statement which is used by the caller to insert
 ## the next commands in the chain.
-proc inlineFilterNot(ext: ExtNimNode) {.compileTime.} =
-  let params = ext.getParams() # parameters of filterNot(...)
-  if (params.len != 1):
-    zfFail("'filterNot' needs exactly 1 parameter!")
-  ext.node = quote:
-    if not(`params`[0]):
-      nil 
+zf_inline filterNot(condition):
+  loop:
+    if not condition:
+      nil
   # the nil statement marks the position where the next commands' code will be inserted.
 
 ## Own implementation of average command which calculates the arithmetic mean of 
 ## sum / count - where count is the number of items and sum is the sum of all items.
-proc inlineAverage(ext: ExtNimNode) {.compileTime.} =
-  let resultIdent = ext.res # access to the actual `result` of the created function
-  let countIdx    = genSym(nskVar, "__count__")
-  let sum         = genSym(nskVar, "__sum__")
-  let prevIt      = ext.prevItNode() # the previous iterator
-  if (ext.getParams().len != 0):
-    zfFail("'average' does not support parameters.")
-  # set the initial counter variables to calculate the average
-  let varInit = quote:
-    `resultIdent` = 0.0 # initialize the result... or infinity maybe? (0 / 0)
-    var `countIdx` = 0
-    var `sum` = 0.0
-  ext.initials.add(varInit) # add to initial section
+zf_inline average():
+  # define used variables (and initialize the result) in the init section
+  init: 
+    result = 0.0 # initialize the result... or infinity maybe? (0 / 0)
+    var countIdx = 0
+    var sum = 0.0
   # executed for each item: increment count and calculate the sum
-  ext.node = quote:
-    `countIdx` += 1
-    `sum` += float(`prevIt`)
+  loop:
+    countIdx += 1
+    sum += float(it)
   # after the loop: calculate the result
-  let calcResult = quote:
-    if `countIdx` > 0:
-      `resultIdent` = `sum` / float(`countIdx`) 
-  ext.finals.add(calcResult)
+  final: 
+    if countIdx > 0:
+      result = sum / float(countIdx)
 
 # Own implementation of intersect command building the intersection of several collections.
 # Duplicates are not removed.
-proc inlineIntersect(ext: ExtNimNode) {.compileTime.} = 
-  # intersect from the example test case below:
-  # combinations(b,squaresPlusOne()). # combine all elements of a,b...
-  # map(c.it). # get the iterator contents of each combination (indices not relevant here)
-  # filter(it[0] == it[1] and it[0] == it[2]). # this is the trickier one
-  # map(it[0])
-  # parameters for new commands
-  let params = ext.replaceChainBy($Command.combinations, $Command.map, $Command.filter, $Command.map)
-  # parameters for current 'intersect' command: the collections to be intersected
-  let intersectParams = ext.getParams()
-  let c = newIdentNode(zfCombinationsId)
-  let it = newIdentNode(zfIteratorVariableName)
-  let mapParams = quote:
-    `c`.it
-  # build the it[0] == it[1] and ... chain
-  var chain: seq[NimNode] = @[]
-  for idx in (1..intersectParams.len):
-    # it[0] == it[idx]
-    let eqExpr = infix(nnkBracketExpr.newTree(it, newIntLitNode(0)), "==", nnkBracketExpr.newTree(it, newIntLitNode(idx)))
+# Unfortunetaly using `zf_inline` does not work here as
+# - intersect supports n parameters
+zf_inline intersect(_):
+  pre:
+    # intersect from the example test case below:
+    # combinations(b,squaresPlusOne()). # combine all elements of a,b...
+    # map(c.it). # get the iterator contents of each combination (indices not relevant here)
+    # filter(it[0] == it[1] and it[0] == it[2]). # this is the trickier one
+    # map(it[0])
+    # parameters for new commands
+    let params = ext.replaceChainBy($Command.combinations, $Command.map, $Command.filter, $Command.map)
+    # parameters for current 'intersect' command: the collections to be intersected
+    let intersectParams = ext.getParams()
+    let c = newIdentNode(zfCombinationsId)
+    let itNode = newIdentNode(zfIteratorVariableName)
+    let mapParams = quote:
+      `c`.it
+    # build the it[0] == it[1] and ... chain
+    var chain: seq[NimNode] = @[]
+    for i in (1..intersectParams.len):
+      # it[0] == it[i]
+      let eqExpr = infix(nnkBracketExpr.newTree(itNode, newIntLitNode(0)), "==", nnkBracketExpr.newTree(itNode, newIntLitNode(i)))
+      if chain.len == 0:
+        chain.add(eqExpr)
+      else:
+        let left = chain[^1]
+        # ... and it[0] == it[i]
+        chain[^1] = infix(left, "and", eqExpr)
     if chain.len == 0:
-      chain.add(eqExpr)
-    else:
-      let left = chain[^1]
-      # ... and it[0] == it[idx]
-      chain[^1] = infix(left, "and", eqExpr)
-  if chain.len == 0:
-    zfFail("'intersect' needs at least 1 parameter!")
-  let mapParams2 = quote:
-    `it`[0]
-  
-  # now insert the command parameters
-  # 1. combinations(b,c,...)
-  for p in intersectParams:
-    params[0].add(p) # use all parameters of `intersect` for the `combinations` command
-  # 2. map(c.it)
-  params[1].add(mapParams)
-  # 3. filter(it[0] == it[1] and ...)
-  params[2].add(chain)
-  # 4. map(it[0])
-  params[3].add(mapParams2)
+      zfFail("'intersect' needs at least 1 parameter!")
+    let mapParams2 = quote:
+      `itNode`[0]
+    
+    # now insert the command parameters
+    # 1. combinations(b,c,...)
+    for p in intersectParams:
+      params[0].add(p) # use all parameters of `intersect` for the `combinations` command
+    # 2. map(c.it)
+    params[1].add(mapParams)
+    # 3. filter(it[0] == it[1] and ...)
+    params[2].add(chain)
+    # 4. map(it[0])
+    params[3].add(mapParams2)
 
 ## Registers the extensions for the user commands during compile time
 macro registerExtension(): untyped =
-  # the commands intersect, filterNot and inc result in sequences if they are the last commands in the chain
-  # hence they should be specifically registered.
-  zfCreateExtensionSeq(ExtCommand, @[ExtCommand.intersect, ExtCommand.filterNot, ExtCommand.inc])
+  # the command intersect results in sequences and was not implemented with zf_iterator, 
+  # hence it should be specifically registered.
+  zfCreateExtension(@["intersect"])
 
 ## Macro that checks that the expression compiles
 ## Calls "check"
@@ -726,7 +704,7 @@ suite "valid chains":
   test "drop, take, dropWhile, takeWhile":
     # filter it > 15 => 16,17,..., sub(3) = 19,20,...
     check((11..222) --> filter(it > 15) --> sub(3,9) == @[19, 20, 21, 22, 23, 24, 25])
-    # take 2 after take 10 - is actually the same as take 2 on the whole 
+    # take 2 after take 10 - is actually the same as take 2 on the whole
     check((11..222) --> take(10) --> take(2) --> sum() == 23)
     # here the filter does actually not count
     check((11..222) --> filter(it > 4) --> take(10) == @[11, 12, 13, 14, 15, 16, 17, 18, 19, 20])
@@ -801,7 +779,7 @@ suite "valid chains":
     let a = @[1,4,3,2,5,9]
     let b = @[7,1,8,9,4]
     # the own extensions are rejected when they have not been registered yet
-    const errorMsg = " is unknown, you could provide your own implementation! See `zfCreateExtension` and `zfCreateExtensionSeq`!"
+    const errorMsg = " is unknown, you could provide your own implementation! See `zfCreateExtension`!"
     reject(a --> average() == 4.0, "average" & errorMsg)
     reject(a --> intersect(b) == @[1,4,9], "intersect" & errorMsg)
     reject(a --> inc(2) == @[3,6,5,4,7,11], "inc" & errorMsg)
@@ -814,6 +792,7 @@ suite "valid chains":
     check(a --> average() == 4.0)
     # get all elements that are both in a and b
     check(a --> intersect(b) == @[1,4,9])
+    check(a --> intersect(b,b) == @[1,4,9])
     # increment a by 1 and by 2
     check(a --> inc() ==  @[2,5,4,3,6,10])
     check(a --> inc(2) == @[3,6,5,4,7,11])
@@ -821,6 +800,6 @@ suite "valid chains":
     check(a --> filterNot(it mod 4 == 1) == @[4,3,2])
 
     # check own errors
-    reject(a --> filterNot(it != 0, it != 1), "'filterNot' needs exactly 1 parameter!")
-    reject(a --> inc(1,2,3), "Only 1 or 0 parameters supported for 'inc' command.")
+    reject(a --> filterNot(it != 0, it != 1), "too many arguments in 'filterNot(it != 0, it != 1)', got 2 but expected only 1")
+    reject(a --> inc(1,2,3), "too many arguments in 'inc(1, 2, 3)', got 3 but expected only 1")
     reject(a --> intersect(), "'intersect' needs at least 1 parameter!")
