@@ -12,6 +12,10 @@ const implicitTypeSuffix = "?" # used when result type is automatically determin
 const defaultResultType = "seq[int]" & implicitTypeSuffix
 const listIteratorName = "__itlist__"
 const minHighVariableName = "__minHigh__"
+const zfInternalIteratorName = "__autoIter__"
+
+# TODO post a bug at NimLang -> reference it here
+const hasIteratorBug = true
 
 type 
 
@@ -27,7 +31,6 @@ type
 
   ExtNimNode* = ref object ## Store additional info the current NimNode used in the inline... functions
     node*: NimNode     ## the current working node / the current function
-    commands: HashSet[Command] ## set of all used command
     prevItIndex*: int  ## index used for the previous iterator 
     itIndex*: int      ## index used for the created iterator - 0 for the first. Will be incremented automatically. 
     isLastItem: bool   ## true if the current item is the last item in the command chain
@@ -80,11 +83,9 @@ type
     b.add(T)
   
 
-static: # need to use var to be able to concat
-  let FORCE_SEQ_HANDLERS = [$Command.indexedMap, $Command.flatten, $Command.indexedFlatten, $Command.zip].toSet
-  let CANNOT_BE_ALTERED_HANDLERS = [Command.map, Command.indexedMap, Command.combinations, Command.flatten, Command.zip].toSet
+static: 
+  ## Contains all functions that may result in a sequence result. Elements are added automatically to SEQUENCE_HANDLERS
   var SEQUENCE_HANDLERS = [$Command.combinations, $Command.sub].toSet()
-  SEQUENCE_HANDLERS.incl(FORCE_SEQ_HANDLERS)
 
 ## Can be read in test implementation
 var lastFailure {.compileTime.} : string = "" 
@@ -97,7 +98,7 @@ proc zfGetLastFailure*() : string {.compileTime.} =
 proc zfFail*(msg: string) {.compileTime.} =
   lastFailure = msg
   assert(false, ": " & msg)
-    
+
 ## This is the default extension complaining when a given function was not found.
 proc extendDefault(ext: ExtNimNode) : ExtNimNode {.compileTime.} =
   zfFail("$1 is unknown, you could provide your own implementation! See `zfCreateExtension`!" % ext.node[0].repr)
@@ -177,10 +178,6 @@ proc toEnum*[T:typedesc[enum]](key: string; t:T): auto =
       result = some(it)
       break
 
-## Converts the id-string to its Command counterpart.
-proc toCommand(key: string): Option[Command] =
-  key.toEnum(Command)
-
 ## Converts the id-string to its ReduceCommand counterpart.
 proc toReduceCommand(key: string): Option[ReduceCommand] =
   if key.startswith("indexed"): 
@@ -251,10 +248,6 @@ proc zfAddItem*[T](a: var Addable[T], idx: int, item: T) =
 proc zfAddItem*[T](a: var Appendable[T], idx: int, item: T) =
   discard(idx)
   a.append(item)
-
-## Helper function to determine the type of the iterated item
-proc iterType[T](items: Iterable[T]): T = 
-  discard
 
 ## Shortcut and safe way to get the ident label of a node
 proc label(node: NimNode): string = 
@@ -345,184 +338,6 @@ proc getStmtList*(node: NimNode, removeNil = true): NimNode =
       return child
   return nil
     
-## Gets the result type, depending on the input-result type and the type-description of the input type.
-## When the result type was given explicitly by the user that type is used.
-## Otherwise the template argument is determined by the input type.
-proc getResType(resultType: string, td: string): (NimNode, bool) {.compileTime.} =
-  if resultType == nil:
-    return (nil, false)
-  var resType = resultType
-  let explicitType = not resultType.endswith(implicitTypeSuffix)
-  if not explicitType:
-    resType = resType[0..resType.len-1-implicitTypeSuffix.len]
-
-  let idx = resType.find("[")
-  if idx != -1:
-    result = (parseExpr(resType), explicitType)
-  else:
-    let res = newIdentNode(resType)
-    let idx2 = td.find("[")
-    var q : NimNode 
-    if idx2 != -1:
-      var tdarg = td[idx2+1..td.len-2]
-      let idxComma = tdarg.find(", ")
-      let idxBracket = tdarg.find("[")
-      if idxComma != -1 and (idxBracket == -1 or idxBracket > idxComma) and resType != "array":
-        # e.g. array[0..2,...] -> seq[...]
-        tdarg = tdarg[idxComma+2..tdarg.len-1]
-      q = parseExpr(resType & "[" & tdarg & "]")
-    else:
-      q = quote:
-        `res`[int] # this is actually a dummy type
-    result = (q, false)
-
-## Creates the function that returns the final result of all combined commands.
-## The result type depends on map, zip or flatten calls. It may be set by the user explicitly using to(...)
-proc createAutoProc(args: NimNode, isSeq: bool, resultType: string, td: string): NimNode =
-  var (resType, explicitType) = getResType(resultType, td)
-  let resultIdent = newIdentNode("result")
-  var autoProc: NimNode = nil
-  let isIter = args.last.kind == nnkCall and args.last[0].label == $Command.createIter 
-  if isIter:
-    let iterName = newIdentNode(args.last[1].label)
-    args.del(args.len-1)
-    if not (args.last[0].label in SEQUENCE_HANDLERS):
-      zfFail("'iter' can only be used with list results - last arg is '" & args.last[0].label & "'")
-    autoProc = quote:
-      iterator `iterName`(): auto = 
-        nil
-  else:
-    autoProc = quote:
-      (proc(): auto =
-        nil)
-  var code: NimNode = nil
-
-  # set a default result in case the resType is not nil - this result will be used
-  # if there is no explicit map, zip or flatten operation called
-  if resType != nil:
-    code = quote:
-      var res: `resType` 
-      `resultIdent` = zfInit(res)
-
-  # check explicitType: type was given explicitly (inclusive all template arguments) by user,
-  # then we use resType directly:
-  if explicitType:
-    discard # use default result above
-  elif not isIter and isSeq:
-    # now we try to determine the result type of the operation automatically...
-    # this is a bit tricky as the operations zip, map and flatten may / will alter the result type.
-    # hence we try to apply the map-operation to the iterator, etc. to get the resulting iterator (and list) type.
-    var listRef = args[0]
-    if listRef.kind == nnkCall and listRef[0].label == $Command.zip:
-      listRef = listRef.findNode(nnkPar)[0][0]
-    let itIdent = newIdentNode(zfIteratorVariableName) # the original "it" used in the closure of "map" command
-    let idxIdent = newIdentNode(zfIndexVariableName)
-    var handlerIdx = 0
-    var handler : NimNode = nil
-    let comboNode = newIdentNode(zfCombinationsId)
-    # the "handler" is the default mapping ``it`` to ``it`` (if "map" is not used)
-    var handlerInit : NimNode = nil
-
-    var hasCombination = false
-    for arg in args:
-      if arg.len > 0:
-        let label = arg[0].repr
-        let isIndexed = label == $Command.indexedMap
-        let isFlatten = label == $Command.flatten 
-        let isIndexedFlatten = label == $Command.indexedFlatten
-        if label == $Command.combinations: 
-          hasCombination = true
-        elif label == $Command.map or label == $Command.zip or isIndexed or isFlatten or isIndexedFlatten: # zip is part of map and will not be checked
-          var params : NimNode = 
-            if isFlatten or isIndexedFlatten:
-              nnkStmtList.newTree().add(newIdentNode(zfIteratorVariableName))
-            else:
-              arg[1].copyNimTree() # params of the map command
-          # use / overwrite the last mapping to get the final result type
-          let prevHandler = "handler" & $handlerIdx 
-          handlerIdx += 1
-          handler = newIdentNode("handler" & $handlerIdx)
-          if handlerInit == nil:
-            handlerInit = nnkStmtList.newTree()
-          else:
-            # call previous handler for each iterator instance
-            params = params.replace(itIdent, parseExpr(prevHandler & "(" & zfIteratorVariableName & ")"))
-          let handlerCall = quote:
-            proc `handler`(`itIdent`: auto): auto =
-              nil
-          var q : NimNode = nil 
-          if isFlatten:
-            q = quote:
-              for it in `params`:
-                return it
-          elif isIndexedFlatten:
-            q = quote:
-              for it in `params`:
-                return (0,it)
-          else:
-            var createCombo = nnkStmtList.newTree()
-            if hasCombination:
-              createCombo = quote:
-                var `comboNode` = createCombination([0,0],[0,0]) # could be used as map param
-                discard `comboNode`
-            var createResult =
-              if isIndexed:
-                quote:
-                  `resultIdent` = (0,`params`)
-              else:
-                quote:
-                  `resultIdent` = `params`
-            q = quote:
-              var `idxIdent` = 0  # could be used as map param
-              `createCombo`
-              `createResult`
-              discard `idxIdent`
-          handlerCall.getStmtList().add(q)
-          handlerInit.add(handlerCall)
-      
-    if handlerInit != nil:
-      # we have a handler(-chain): use it to map the result type
-      if resultType == nil:
-        code = quote:
-          `handlerInit`
-          `resultIdent` = zfInit(`listRef`,`handler`)
-      else:
-        let resTypeOk = resType.repr.startswith(resultType)
-        if resultType == "seq" or resultType == defaultResultType:
-          # this works with seq but unfortunately not (yet) with DoublyLinkedList
-          code = quote:
-            `handlerInit`
-            var res: seq[iterType(`listRef`).type]
-            `resultIdent` = zfInit(res, `handler`)
-        elif (resultType == "list" or resultType == "DoublyLinkedList") and not resTypeOk:
-          zfFail("unable to determine the output type automatically - please use list[<outputType>].") 
-        elif resultType == "array" and not resTypeOk:
-          zfFail("unable to determine the output type automatically - array needs size and type parameters.")
-        else:
-          code = quote:
-            `handlerInit`
-            var res: `resType`
-            when compiles(zfInit(res,`handler`)):
-              `resultIdent` = zfInit(res,`handler`)
-            else:
-              static:
-                zfFail("unable to determine the output type automatically.")
-    elif resultType == nil: # no handlerInit used
-      # result type was not given and map/zip/flatten not used: 
-      # use the same type as in the original list
-      code = quote:
-        `resultIdent` = zfInit(`listRef`)
-  # no sequence output:
-  # we do _not_ need to initialize the resulting list type here
-  else:
-    code = nil
-
-  let stmtInit = autoProc.getStmtList()
-  if code != nil:
-    stmtInit.add(code)
-  stmtInit.add(newNilLit())
-  result = autoProc
-  
 proc mkItNode*(index: int) : NimNode {.compileTime.} = 
   newIdentNode(internalIteratorName & ("$1" % $index))
 
@@ -598,27 +413,27 @@ proc addElem*(ext: ExtNimNode, addItem: NimNode): NimNode {.compileTime.} =
     zfFail("addElem has already been called!")
   ext.elemAdded = true 
   if ext.isLastItem:
-    if ext.isIter:
-      result = quote:
-        yield `addItem`
-    else:
-      let resultIdent = ext.res
-      # use -1 to force an error in case the index was actually needed instead of silently doing the wrong thing
-      let idxIdent = if ext.needsIndex: newIdentNode(zfIndexVariableName) else: newIntLitNode(-1)
-      let resultType = ext.resultType
-      let typedescr = ext.typeDescription
-      
-      result = quote:
-        when compiles(zfAddItem(`resultIdent`, `idxIdent`, `addItem`)):
-          zfAddItem(`resultIdent`, `idxIdent`, `addItem`)
-        else:
-          static:
-            when (`resultType` == nil or `resultType` == ""):
-              zfFail("Need either 'add' or 'append' implemented in '" & `typedescr` & "' to add elements")
-            else:
-              zfFail("Result type '" & `resultType` & "' and added item of type '" & $`addItem`.type & "' do not match!")
+    result = quote:
+      yield `addItem`
   else:
     result = nil
+
+proc addElemResult(ext: ExtNimNode, addItem: NimNode): NimNode {.compileTime.} =
+  let resultIdent = ext.res
+  # use -1 to force an error in case the index was actually needed instead of silently doing the wrong thing
+  let idxIdent = if ext.needsIndex: newIdentNode(zfIndexVariableName) else: newIntLitNode(-1)
+  let resultType = ext.resultType
+  let typedescr = ext.typeDescription
+  
+  result = quote:
+    when compiles(zfAddItem(`resultIdent`, `idxIdent`, `addItem`)):
+      zfAddItem(`resultIdent`, `idxIdent`, `addItem`)
+    else:
+      static:
+        when (`resultType` == nil or `resultType` == ""):
+          zfFail("Need either 'add' or 'append' implemented in '" & `typedescr` & "' to add elements")
+        else:
+          zfFail("Result type '" & `resultType` & "' and added item of type '" & $`addItem`.type & "' do not match!")
 
 ## Helper for Zero-DSL: quote all used variables that are defined somewhere in the created function.
 proc addQuotes(a: NimNode, quotedVars: Table[string,string]) =
@@ -650,7 +465,7 @@ proc replaceIt(a: NimNode, repl: NimNode, left: bool) : bool =
       if left:
         return true # only once per left node
       result = true
-    
+
     if a.kind == nnkDotExpr:
       break # only replace left side of dot
 
@@ -752,7 +567,7 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
           symName = funDef[i][0].label
         let sym = newIdentNode(symName)
         quotedVars[symName] = symName
-        let q = quote:
+        paramSection.add quote do:
           let `sym` =
             if `i` < `ext`.node.len: 
               adapt(`ext`, `i`)
@@ -767,47 +582,40 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
                   else:
                     zfFail("missing argument '$1' for '$2'" % [`symName`, `funName`])
                 newIntLitNode(0)
-        paramSection.add(q)        
     
     let hasResult = body.findNode(nnkIdent, "result") != nil 
     if hasResult:
       let res = newIdentNode("resultIdent")
-      let q = quote:
+      letSection.add quote do:
         let `res` = newIdentNode("result")
-      letSection.add(q)
       quotedVars["result"] = "resultIdent"
     if hasResult or body.findNode(nnkReturnStmt) != nil:
-      let q = quote:
+      letSection.add quote do:
         if not `ext`.isLastItem:
           zfFail("'$1' has a result and must be last item in chain!" % `funName`)
-      letSection.add(q)
     else:
       # register iterator as sequence handler
       zfAddSequenceHandlers(funName)
       
     if body.findNode(nnkIdent, zfIndexVariableName) != nil:
       let idxIdent = newIdentNode("idxIdent")
-      let q = quote:
+      letSection.add quote do:
         let `idxIdent` = newIdentNode(`zfIndexVariableName`)
         discard(`idxIdent`)
         `ext`.needsIndex = true
-      letSection.add(q)
       quotedVars[zfIndexVariableName] = "idxIdent"
     
     # replace it in 'it = ...' with `nextIt` and create the next iterator
     if body.replaceIt(nnkAccQuoted.newTree(newIdentNode("nextIdent")), true):
       let nextIt = newIdentNode("nextIdent")
-      let q = quote:
+      letSection.add quote do:
         let `nextIt` = `ext`.nextItNode()
-      letSection.add(q)
-    
     # access the previous iterator replacing 'it'
     if body.replaceIt(nnkAccQuoted.newTree(newIdentNode("prevIdent")), false):
       let prev = newIdentNode("prevIdent")
-      let q = quote:
+      letSection.add quote do:
         let `prev` = `ext`.prevItNode()
-      letSection.add(q)
-    
+
     # create the proc
     let q = quote:
       proc `procName`( `ext`: ExtNimnode) {.compileTime.} =
@@ -829,46 +637,44 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
         # all variables defined in the body have to be uniquely referenced 
         # - independent from the code section they are located in
         body.addQuotes(quotedVars)
-      let qCmd = 
-        case tpe:
-        of "pre":
-          quote:
+
+      case tpe:
+      of "pre":
+        code.add quote do:
+          `cmd`
+      of "init":
+        code.add quote do:
+          let i = quote:
             `cmd`
-        of "init":
-          quote:
-            let i = quote:
-              `cmd`
-            `ext`.initials.add(i)
-        of "loop":
-          quote:
-            `ext`.node = quote:
-              `cmd`
-        of "delegate":
-          assert(firstDelegate, "only one delegate supported")
-          firstDelegate = false
-          let label = cmd[0][0].label
-          let inlineCmd = newIdentNode("inline" & label.capitalizeAscii())     
-          let p = newCall(label)
-          for i in 1..<cmd[0].len:
-            p.add(cmd[0][i])
-          quote:
-            `ext`.node = quote:
-              `p`
-            `inlineCmd`(`ext`)
-        of "end":
-          quote:
-            let e = quote:
-              `cmd`
-            `ext`.endLoop.add(e)
-        of "final":
-          quote:
-            let f = quote:
-              `cmd`
-            `ext`.finals.add(f)
-        else:
-          assert(false, "unsupported keyword: " & tpe)
-          nil
-      code.add(qCmd)
+          `ext`.initials.add(i)
+      of "loop":
+        code.add quote do:
+          `ext`.node = quote:
+            `cmd`
+      of "delegate":
+        assert(firstDelegate, "only one delegate supported")
+        firstDelegate = false
+        let label = cmd[0][0].label
+        let inlineCmd = newIdentNode("inline" & label.capitalizeAscii())     
+        let p = newCall(label)
+        for i in 1..<cmd[0].len:
+          p.add(cmd[0][i])
+        code.add quote do:
+          `ext`.node = quote:
+            `p`
+          `inlineCmd`(`ext`)
+      of "end":
+        code.add quote do:
+          let e = quote:
+            `cmd`
+          `ext`.endLoop.add(e)
+      of "final":
+        code.add quote do:
+          let f = quote:
+            `cmd`
+          `ext`.finals.add(f)
+      else:
+        assert(false, "unsupported keyword: " & tpe)
     result = q
   else:
     assert(false, "did not expect " & $header.kind & " or " & $body.kind)
@@ -1060,11 +866,9 @@ proc inlineForeach(ext: ExtNimNode) {.compileTime.} =
   
   # special case: assignment to iterator -> try to assign to outer list (if possible)
   if adaptedExpression.kind == nnkExprEqExpr:
-    # this only works if the current list has not (yet) been manipulated with the following methods:
-    # map, indexedMap, combinations, flatten and zip
-    if (ext.commands.intersection(CANNOT_BE_ALTERED_HANDLERS).len > 0):
-      zfFail("Cannot change list in foreach that has already been altered with: map, indexedMap, combinations, flatten or zip!")
-
+    if ext.itIndex > 1:
+      zfFail("Adapted list cannot be changed in-place!")
+    # this only works if the current list has not (yet) been manipulated    
     var itNode = adaptedExpression.findParentWithChildLabeled(ext.prevItNode.label) 
     if itNode != nil:
       let listRef = ext.listRef
@@ -1078,7 +882,7 @@ proc inlineForeach(ext: ExtNimNode) {.compileTime.} =
       elif itNode == adaptedExpression:
         ext.needsIndex = true
         adaptedExpression = quote:
-         `listRef`[`index`] = `rightSide`
+          `listRef`[`index`] = `rightSide`
       else:
         ext.needsIndex = true
         # when using a dot-expression the content is first saved to a temporary variable
@@ -1150,6 +954,7 @@ proc inlineReduce(ext: ExtNimNode) {.compileTime.} =
   # in reduce the operator has to use the newest iterator
   let nextIt = ext.nextItNode()
   if ext.label.startswith("indexed"):
+
     zf_inline_call reduce(op):
       init:
         var initAccu = true
@@ -1222,16 +1027,15 @@ proc inlineCombinations(ext: ExtNimNode) {.compileTime.} =
       indices.add(idxInner)
       let listRef = ext.node[idx]
       idx += 1
-      let q = quote:
+      code.add quote do:
         var `idxInner` = -1
         for `itIdent` in `listRef`:
           `idxInner` += 1
           nil
-      code = code.add(q).getStmtList()
-    let q = quote:
+      code = code.getStmtList()
+    code.add quote do:
       let `itCombo` = createCombination(`iterators`, `indices`)
       nil
-    code.add(q)
     ext.node = root
 
 ## Implementation of the `count` command. Counts all (filtered) items.
@@ -1274,9 +1078,8 @@ proc inlineSeq(ext: ExtNimNode) {.compileTime.} =
       while `itlist` != nil:
         var `itIdent` = `itlist`.value
         nil
-    let e = quote:
+    ext.endLoop.add quote do:
       `itlist` = `itlist`.next
-    ext.endLoop.add(e)
   
   else:
     # usual iterator implementation
@@ -1303,11 +1106,6 @@ proc inlineElement(ext: ExtNimNode) {.compileTime.} =
     return # command has been handled
   if ext.node.kind == nnkCall and (ext.itIndex > 0):
     case label:
-    of $Command.zip:
-      ext.ensureFirst()
-      if not ext.hasMinHigh:
-        zfFail("internal error: 'minHigh' should be defined!")
-      ext.inlineSeq()
     of $Command.foreach:
       ext.inlineForeach()
     else:
@@ -1431,16 +1229,180 @@ proc replaceZip(args: NimNode) : NimNode {.compileTime.} =
     idx += 1
   if highList.len > 0:
     let minHigh = newIdentNode(minHighVariableName)
-    let i = quote:
+    result.add quote do:
       let `minHigh`= min(`highList`)
-    result.add(i)
 
+## Gets the result type, depending on the input-result type and the type-description of the input type.
+## When the result type was given explicitly by the user that type is used.
+## Otherwise the template argument is determined by the input type.
+proc getResType(resultType: string, td: string): (NimNode, bool) {.compileTime.} =
+  if resultType == nil:
+    return (nil, false)
+  var resType = resultType
+  let explicitType = not resultType.endswith(implicitTypeSuffix)
+  if not explicitType:
+    resType = resType[0..resType.len-1-implicitTypeSuffix.len]
+
+  let idx = resType.find("[")
+  if idx != -1:
+    result = (parseExpr(resType), explicitType)
+  else:
+    let res = newIdentNode(resType)
+    let idx2 = td.find("[")
+    var q : NimNode 
+    if idx2 != -1:
+      var tdarg = td[idx2+1..td.len-2]
+      let idxComma = tdarg.find(", ")
+      let idxBracket = tdarg.find("[")
+      if idxComma != -1 and (idxBracket == -1 or idxBracket > idxComma) and resType != "array":
+        # e.g. array[0..2,...] -> seq[...]
+        tdarg = tdarg[idxComma+2..tdarg.len-1]
+      q = parseExpr(resType & "[" & tdarg & "]")
+    else:
+      q = quote:
+        `res`[int] # this is actually a dummy type
+    result = (q, false)
+
+macro iteratorTypeTd(td: typedesc): untyped =
+  let kind = td.getType[1][1].kind
+  if kind == nnkBracketExpr and td.getType[1][1][0].kind == nnkSym and td.getType[1][1][0].repr == "array" and td.getType[1][1][1].kind == nnkBracketExpr and td.getType[1][1][1][0].repr == "range":
+    # special handling for ranges (in arrays)
+    let f = td.getType[1][1][1][1]
+    let t = td.getType[1][1][1][2]
+    let tpe = td.getType[1][1][2]
+    result = quote:
+      array[`f`..`t`, `tpe`]
+  elif kind == nnkBracketExpr:
+    # special handling for tuples
+    result = newPar()
+    for i in 1..td.getType[1][1].len-1:
+      result.add(td.getType[1][1][i])
+  elif kind == nnkEnumTy:
+    result = td.getTypeInst[1][0][0]
+  else:
+    result = td.getType[1][1]
+
+macro iteratorType*(td: untyped): untyped =
+  quote:
+    iteratorTypeTd(`td`.type)
+
+proc createIteratorFunction(args: NimNode): NimNode =
+  let iterName = newIdentNode(zfInternalIteratorName)
+  result = quote:
+    iterator `iterName`(): auto = 
+      nil
+
+## Creates the function that returns the final result of all combined commands.
+## The result type depends on map, zip or flatten calls. It may be set by the user explicitly using to(...)
+proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool, resultType: string, td: string, loopDef: NimNode, forceSeq: bool, isIter: bool): NimNode =
+  var (resType, explicitType) = getResType(resultType, td)
+  var collType = if resType != nil: resType.repr else: td
+  let toSeq = (resultType != nil and (resultType == "seq" or resultType.startswith("seq[")))
+
+  var hasIter = false
+  var itFun: NimNode = nil
+  var itDef: NimNode = nil
+
+  if isSeq and not isIter and (resType != nil or forceSeq):
+    if not explicitType and (collType.find("[") != -1 or toSeq or forceSeq):
+      hasIter = true
+      itFun = args.createIteratorFunction()
+      itFun.getStmtList().add(loopDef)
+      itDef = itFun[0]
+
+  let resultIdent = newIdentNode("result")
+  var autoProc = quote:
+    (proc(): auto =
+      nil)
+  var code: NimNode = nil
+
+  # set a default result in case the resType is not nil - this result will be used
+  # if there is no explicit map, zip or flatten operation called
+  if resType != nil:
+    code = quote:
+      var res: `resType` 
+      `resultIdent` = zfInit(res)
+
+  # check explicitType: type was given explicitly (inclusive all template arguments) by user,
+  # then we use resType directly:
+  if explicitType:
+    discard # use default result above
+  elif isSeq:
+    # now we try to determine the result type of the operation automatically...
+    # this is a bit tricky as the operations zip, map and flatten may / will alter the result type.
+    # hence we try to apply the map-operation to the iterator, etc. to get the resulting iterator (and list) type.
+    var listRef = args[0]
+    if listRef.kind == nnkCall and listRef[0].label == $Command.zip:
+      listRef = listRef.findNode(nnkPar)[0][0]
+    
+    let i = collType.find("[")
+    let toSeq = (resultType != nil and (resultType == "seq" or resultType.startswith("seq[")))
+    if i != -1 and not toSeq and hasIter and (not forceSeq or resultType != nil):
+      collType = collType[0..i-1]
+      let collSym = parseExpr(collType)
+      let resDef =
+        if collType == "array":
+          quote:
+            array[`listRef`.len, iteratorType(`itDef`)]
+        else:
+          quote:
+            `collSym`[iteratorType(`itDef`)]
+      code = quote:
+        var res: `resDef`
+        `resultIdent` = zfInit(res)
+    elif (forceSeq or toSeq) and hasIter:
+      code = quote:
+        var res: seq[iteratorType(`itDef`)]
+        `resultIdent` = zfInit(res)
+    else:
+      # use the same type as in the original list
+      code = nnkStmtList.newTree().add quote do:
+        `resultIdent` = zfInit(`listRef`)
+
+  if isSeq:
+    let idx = newIdentNode(zfIndexVariableName)
+    # unfortunatly it does not (yet) work in Nim to define iterators anywhere in Nim and get a result from it
+    # so defining an iterator inside an anonymous proc (this generated one) - inside another proc - yields no results
+    # so we copy everything - this is also a tad more efficient for the running code in the end...
+    if hasIteratorBug or not hasIter:
+      var addLoop = loopDef.findNode(nnkStmtList)
+      if hasIter:
+        addLoop = addLoop.copyNimTree()
+      # there should only be one yield statement - replace it with zfAddItem
+      let (yieldStmt,path) = addLoop.findNodePath(nnkYieldStmt)
+      let yieldRepl = addLoop.apply(path, ext.addElemResult(yieldStmt[0]))
+      if hasIteratorBug:
+        code.add(yieldRepl)
+      else:
+        code = nil
+    else:
+      let it = newIdentNode(internalIteratorName)
+      code.add quote do:
+        var `idx` = 0
+        for `it` in `itDef`():
+          zfAddItem(`resultIdent`, `idx`, `it`)
+          `idx` += 1
+
+  # no sequence output:
+  # we do _not_ need to initialize the resulting list type here
+  else:
+    code = nil
+
+  let stmtInit = autoProc.getStmtList()
+  if code != nil:
+    stmtInit.add(code)
+  stmtInit.add(newNilLit())
+  if itFun != nil:
+    autoProc.findNode(nnkStmtList).insert(0, itFun)
+  result = autoProc
+  
 ## Check if the "to" parameter is used to generate a specific result type.
 ## The requested result type is returned and the "to"-node is removed.
-proc checkTo(args: NimNode, td: string): string {.compileTime.} = 
+proc checkTo(args: NimNode, td: string): string {.compileTime.} =
   let last = args.last
+  let hasTo = last.kind == nnkCall and last[0].repr == $Command.to 
   var resultType : string = nil
-  if last.kind == nnkCall and last[0].repr == $Command.to:
+  if hasTo:
     args.del(args.len-1) # remove the "to" node
     if args.len <= 1:
       # there is no argument other than "to": add default mapping function "map(it)"
@@ -1450,9 +1412,11 @@ proc checkTo(args: NimNode, td: string): string {.compileTime.} =
         zfFail("'to' can only be used with list results - last arg is '" & args.last[0].label & "'")
     resultType = last[1].repr
     if resultType == "list": # list as a shortcut for DoublyLinkedList
-      resultType = "DoublyLinkedList"
+      resultType = "DoublyLinkedList" & implicitTypeSuffix
     elif resultType.startswith("list["):
       resultType = "DoublyLinkedList" & resultType[4..resultType.len-1]
+    elif resultType == "seq":
+      resultType = defaultResultType
   if resultType == nil:
     for arg in args:
       if arg.kind == nnkCall:
@@ -1462,7 +1426,7 @@ proc checkTo(args: NimNode, td: string): string {.compileTime.} =
         let isSeq = label.endswith("Seq") 
         let isList = label.endswith("List")
         # Check forced sequences or lists
-        if isSeq or isList or label in FORCE_SEQ_HANDLERS:
+        if isSeq or isList:
           if isSeq:
             arg[0] = newIdentNode(label[0..label.len-4])
           elif isList:
@@ -1489,37 +1453,30 @@ proc iterHandler(args: NimNode, debug: bool, td: string): NimNode {.compileTime.
   let hasMinHigh = preInit.len > 0
   var lastCall = args.last[0].label
   let isIter = lastCall == $Command.createIter
+  var iterNode: NimNode = nil
   if isIter:
     lastCall = args[args.len-2][0].label
+    let iterName = newIdentNode(args.last[1].label)
+    args.del(args.len-1)
+    if not (args.last[0].label in SEQUENCE_HANDLERS):
+      zfFail("'iter' can only be used with list results - last arg is '" & args.last[0].label & "'")
+    iterNode = quote:
+      iterator `iterName`(): auto = 
+        nil
+  
   let isSeq = lastCall in SEQUENCE_HANDLERS
 
-  var defineIdxVar = not hasMinHigh and not isIter
+  var defineIdxVar = (not hasMinHigh and not isIter) and (isSeq and hasIteratorBug) 
   var needsIndexVar = false
 
-  if ((not isIter and (resultType != nil and resultType.startswith("array") or 
-      (resultType == nil and td.startswith("array")))) or
+  if ((not isIter and (isSeq and (resultType != nil and resultType.startswith("array") or 
+      (resultType == nil and td.startswith("array"))))) or
       args.findNode(nnkIdent, zfIndexVariableName) != nil):
       needsIndexVar = true
   
-  var code: NimNode
-  let needsFunction = (lastCall != $Command.foreach)
-  if needsFunction:
-    result = args.createAutoProc(isSeq, resultType, td)
-    code = result.last.getStmtList() 
-    if (isIter):
-      code = result.getStmtList()
-    if preInit.len > 0:
-      code.insert(0, preInit)
-    if not isIter:
-      result = nnkCall.newTree(result)
-  else:
-    # there is no extra function, but at least we have an own section here - preventing double definitions
-    var q = quote:
-      if true:
-        `preInit`
-        nil
-    result = q
-    code = q.getStmtList()
+  let codeStart = nnkStmtList.newTree()
+  var code = codeStart
+
   var init = code
   let initials = nnkStmtList.newTree()
   let varDef = nnkStmtList.newTree()
@@ -1532,22 +1489,16 @@ proc iterHandler(args: NimNode, debug: bool, td: string): NimNode {.compileTime.
   let endLoop = nnkStmtList.newTree()
   var startNode: NimNode = nil
 
-  var commands: seq[Command] = @[]
   var argIdx = 0
+  var ext: ExtNimNode
+
   while argIdx < args.len: # args could be changed
     let arg = args[argIdx]
     let isLast = argIdx == args.len-1
     argIdx += 1
     
-    if arg.kind == nnkCall:
-      let label = arg[0].label
-      let cmdCheck = label.toCommand()
-      if none(Command) != cmdCheck:
-        commands.add(cmdCheck.get())
-
     let cmdName = arg.label
-    let ext = ExtNimNode(node: arg, 
-                         commands: commands.toSet(),
+    ext = ExtNimNode(node: arg, 
                          prevItIndex: index-1,
                          itIndex: index, 
                          isLastItem: isLast,
@@ -1582,11 +1533,11 @@ proc iterHandler(args: NimNode, debug: bool, td: string): NimNode {.compileTime.
     if not hasMinHigh and not defineIdxVar:
       defineIdxVar = ext.needsIndex
     index = ext.itIndex
+    
   if not hasMinHigh and defineIdxVar:
     let idxIdent = newIdentNode(zfIndexVariableName)
-    let identDef = quote:
+    varDef.add quote do:
       var `idxIdent` = 0 
-    varDef.add(identDef)
 
   if finals.len > 0:
     init.add(finals)  
@@ -1601,10 +1552,33 @@ proc iterHandler(args: NimNode, debug: bool, td: string): NimNode {.compileTime.
   if not hasMinHigh and defineIdxVar and loopNode != nil:
     # add index increment to end of the for loop
     let idxIdent = newIdentNode(zfIndexVariableName)
-    let incrIdx = quote:
+    loopNode.last.add quote do:
       `idxIdent` += 1
-    loopNode.last.add(incrIdx)
 
+  let needsFunction = (lastCall != $Command.foreach)
+  if needsFunction:
+    let theProc = if isIter: iterNode else: ext.createAutoProc(args, isSeq, resultType, td, codeStart, index > 1, isIter)
+    result = theProc
+    code = result.last.getStmtList() 
+    if isIter:
+      code = result.getStmtList()
+      code.add(codeStart)
+    if not isSeq:
+      code.insert(0,codeStart)
+    if preInit.len > 0:
+      code.insert(0, preInit)
+    if not isIter:
+      result = nnkCall.newTree(result)
+  else:
+    # there is no extra function, but at least we have an own section here - preventing double definitions
+    var q = quote:
+      if true:
+        `preInit`
+        nil
+    result = q
+    code = q.getStmtList()
+    code.insert(0,codeStart)
+  
   if (debug):
     echo("# " & repr(orig).replace(",", " -->"))
     echo(repr(result).replace("__", ""))
@@ -1706,18 +1680,19 @@ macro connect*(args: varargs[untyped]): untyped =
   result = quote:
     connectCall(type(`args`[0]), `args`)
   
+const debugAll = false
 ## general macro to invoke all available zero_functional functions
 macro `-->`*(a: untyped, b: untyped): untyped =
   let (a,b,debug) = checkArrow(a,b,"-->")
   if a.kind == nnkIdent:
     if not debug: # using debug (or `debug`) directly does not work (?!)
       result = quote:
-        delegateArrow(type(`a`), `a`, `b`, false)
+        delegateArrow(type(`a`), `a`, `b`, debugAll)
     else:
       result = quote:
         delegateArrow(type(`a`), `a`, `b`, true)
   else:
-    result = delegateMacro(a, b, debug, "seq")
+    result = delegateMacro(a, b, debug or debugAll, "seq")
 
 ## use this macro for debugging - will output the created code
 macro `-->>`*(a: untyped, b: untyped): untyped =
@@ -1727,3 +1702,8 @@ macro `-->>`*(a: untyped, b: untyped): untyped =
       delegateArrow(type(`a`), `a`, `b`, true)
   else:
     result = delegateMacro(a, b, true, "seq")
+
+when isMainModule:
+  let  aArray = [4,8,-2]
+  #echo(a -->> filter(it > 0))
+  echo(aArray -->> to(list))

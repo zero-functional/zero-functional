@@ -126,34 +126,23 @@ zf_inline intersect(_):
     let intersectParams = ext.getParams()
     let c = newIdentNode(zfCombinationsId)
     let itNode = newIdentNode(zfIteratorVariableName)
-    let mapParams = quote:
-      `c`.it
     # build the it[0] == it[1] and ... chain
-    var chain: seq[NimNode] = @[]
+    var chain = quote: true
     for i in (1..intersectParams.len):
-      # it[0] == it[i]
-      let eqExpr = infix(nnkBracketExpr.newTree(itNode, newIntLitNode(0)), "==", nnkBracketExpr.newTree(itNode, newIntLitNode(i)))
-      if chain.len == 0:
-        chain.add(eqExpr)
-      else:
-        let left = chain[^1]
-        # ... and it[0] == it[i]
-        chain[^1] = infix(left, "and", eqExpr)
-    if chain.len == 0:
-      zfFail("'intersect' needs at least 1 parameter!")
-    let mapParams2 = quote:
-      `itNode`[0]
-    
+      # ... and it[0] == it[i]
+      chain = quote:
+        `chain` and (`itNode`[0] == `itNode`[`i`])
+
     # now insert the command parameters
     # 1. combinations(b,c,...)
     for p in intersectParams:
       params[0].add(p) # use all parameters of `intersect` for the `combinations` command
     # 2. map(c.it)
-    params[1].add(mapParams)
+    params[1].add quote do: `c`.it
     # 3. filter(it[0] == it[1] and ...)
     params[2].add(chain)
     # 4. map(it[0])
-    params[3].add(mapParams2)
+    params[3].add quote do: `itNode`[0]
 
 ## Registers the extensions for the user commands during compile time
 macro registerExtension(): untyped =
@@ -306,7 +295,8 @@ suite "valid chains":
     check((zip(aArray, bArray, cArray) --> filter(it[0] > 0 and it[2] == "one")) == @[(8, 1, "one")])
 
   test "array map":
-    check((aArray --> map(it - 1)) == [1, 7, -5])
+    # map creates a new iterator hence array cannot be used as output
+    check((aArray --> map(it - 1)) == @[1, 7, -5])
 
   test "array filter":
     check((aArray --> filter(it > 2)) == [0, 8, 0])
@@ -335,7 +325,8 @@ suite "valid chains":
     check((aArray --> fold(0, a + it)) == 6)
 
   test "array map with filter":
-    check((aArray --> map(it + 2) --> filter(it mod 4 == 0)) == [4, 0, 0])
+    # map forces seq output
+    check((aArray --> map(it + 2) --> filter(it mod 4 == 0)) == @[4])
 
   test "array map with exists":
     check((aArray --> map(it + 2) --> exists(it mod 4 == 0)))
@@ -377,7 +368,7 @@ suite "valid chains":
 
   test "array filterSeq":
     check((aArray --> map(it * 2) --> filterSeq(it > 0)) == @[4, 16])
-    check((aArray --> map(it * 2) --> filter(it > 0)) == [4, 16, 0])
+    check((aArray --> map(it * 2) --> filter(it > 0)) == @[4, 16])
 
   test "array mapSeq":
     check((aArray --> map(it + 2) --> mapSeq(it * 2)) == @[8, 20, -4])
@@ -482,7 +473,7 @@ suite "valid chains":
     d.append(1)
     d.append(2)
     d.append(3)
-    let e : DoublyLinkedList[string] = (d --> map(float(it) * 2.4) --> filter(it < 6.0) --> map($it))
+    let e : DoublyLinkedList[string] = (d --> map(float(it) * 2.4) --> filter(it < 6.0) --> map($it) --> to(list))
     check((e --> map(it) --> to(seq[string])) == @["2.4", "4.8"])
     check((e --> map($it) --> to(seq)) == @["2.4", "4.8"])
     check((e --> map(it) --> to(seq)) == @["2.4", "4.8"])
@@ -524,7 +515,7 @@ suite "valid chains":
     accept((fArray --> flatten() --> to(array[6,int])) == [1,2,3,4,5,6])
     accept((fArray --> flatten() --> to(array[8,int])) == [1,2,3,4,5,6,0,0]) # if array is too big, the array is filled with default zero
 
-    reject((fList --> flatten()) == fSeq)
+    accept((fList --> flatten()) == fSeq)
     # list is flattened to list by default
     # comparison of DoublyLinkedList does not seem to work directly...
     accept($(fList --> flatten()) == $fListFlattened)
@@ -536,7 +527,7 @@ suite "valid chains":
             "Need either 'add' or 'append' implemented in 'PackWoAdd' to add elements") 
     # forced to seq -> compiles
     accept((p2 --> filter(it != 0) --> to(seq)) == @[1,2,3])
-    # also when using map which will lead to seq output
+    # also when using map will lead to seq output
     accept((p2 --> filter(it != 0) --> map($it)) == @["1","2","3"])
     accept((p2 --> filter(it != 0) --> map(it)) == @[1,2,3])
 
@@ -617,10 +608,9 @@ suite "valid chains":
     var my_seq2 = @[1,2,3,4]
     my_seq --> foreach(it = it + 1)
     check(my_seq == @[3,4,6,8])
-    const errMsg = "Cannot change list in foreach that has already been altered with: map, indexedMap, combinations, flatten or zip!"
+    const errMsg = "Adapted list cannot be changed in-place!"
     reject(my_seq --> map(it) --> foreach(it = it + 1), errMsg)
     reject(my_seq --> indexedMap(it) --> foreach(it[1] = it[1] + 1), errMsg)
-    reject(my_seq --> combinations() --> foreach(it = it + 1), errMsg)
     reject(my_seq --> flatten() --> foreach(it = it + 1), errMsg)
     reject(zip(my_seq,my_seq2) --> foreach(it[0] = it[0] + 1), errMsg)
     check(my_seq == @[3,4,6,8])
@@ -643,9 +633,13 @@ suite "valid chains":
       x --> foreach(sum += it) 
       return sum
 
+    proc chkConversion(x: seq[int]): seq[string] =
+      result = x --> map($it)
+
     var s = @[1,2,3]
-    check(chkVar(s, 2) == @[1,3])
+    check(chkVar(s, 2) == @[1,3]) # - strangely this doesn't work any more - seems to be a problem of defining an iterator in the anonymous function in a local function (?!)
     check(chkVarFor(s) == 6)
+    check(chkConversion(s) == @["1","2","3"])
 
   test "complex type call":
     let sp = ShowPack()
@@ -653,9 +647,7 @@ suite "valid chains":
     let p2 = Pack(rows: @[2,4,6])
     let up = UsePack(packs: @[p1, p2])
     accept(up --> map(sp.show(it)) is seq[string])
-    # internally asserted, but initially a compiler problem
-    reject(up --> map(sp.show(it)) --> to(list) is DoublyLinkedList[string], 
-            "Result type 'DoublyLinkedList' and added item of type 'string' do not match!")
+    accept(up --> map(sp.show(it)) --> to(list) is DoublyLinkedList[string])
     accept(up --> map(sp.show(it)) --> to(seq) is seq[string])
     accept(up --> map(sp.show(it)) --> to(list[string]) is DoublyLinkedList[string])
     accept(up --> map(sp.show(it)) --> to(seq[string]) is seq[string])
@@ -740,8 +732,7 @@ suite "valid chains":
     check(averageHeight == 160.0)
 
     (1..3) --> map(it) --> createIter(a)
-    # auto type detection is limited when working with iterator functions on the left side
-    reject(a() --> map(it))
+    check(a() --> map(it) == @[1,2,3])
     # the result type cannot be guessed automatically - so set it explicitly
     accept(a() --> to(seq[int]) == @[1,2,3])
 
