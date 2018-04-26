@@ -707,6 +707,287 @@ macro zfInlineCall(header: untyped, body: untyped): untyped =
     `q`
     `fun`(`ext`)
 
+## Helper for Zero-DSL: quote all used variables that are defined somewhere in the created function.
+proc addQuotes(a: NimNode, quotedVars: Table[string,string]) =
+  if a.kind != nnkAccQuoted and (a.kind != nnkCall or a[0].label != "pre"):
+    for i in 0..<a.len:
+      let child = a[i]
+      if child.kind == nnkIdent and child.label in quotedVars:
+        a[i] = nnkAccQuoted.newTree(newIdentNode(quotedVars[child.label]))
+      else:
+        child.addQuotes(quotedVars)
+
+## Helper for Zero-DSL: replace all 'it' nodes by the next iterator (in let expressions when defining a new iterator)
+## or by previous iterator. 
+proc replaceIt(a: NimNode, repl: NimNode, left: bool) : bool =
+  result = false 
+  for i in 0..<a.len:
+    let child = a[i]
+    if left and (child.kind == nnkExprEqExpr or child.kind == nnkIdentDefs):
+      if child[0].kind == nnkIdent and child[0].label == zfIteratorVariableName:
+        child[0] = repl
+        return true
+
+    elif not left:
+      if child.kind == nnkIdent and child.label == zfIteratorVariableName:
+        a[i] = repl
+        result = true
+
+    if child.replaceIt(repl, left):
+      if left:
+        return true # only once per left node
+      result = true
+    
+    if a.kind == nnkDotExpr:
+      break # only replace left side of dot
+
+## Replace variable definitions with quoted variables, return let section for ident definitions
+proc replaceVarDefs(a: NimNode, quotedVars: var Table[string,string], preSection=false): NimNode = 
+  result = nnkStmtList.newTree()
+  let isPre = preSection or (a.kind == nnkCall and a[0].label == "pre")
+  for b in a:
+    if (a.kind == nnkVarSection or a.kind == nnkLetSection) and b.kind == nnkIdentDefs:
+      if b[0].kind == nnkIdent: # Correct? Or: sym also??
+        let label = b[0].label
+        if label != "idx" and label != "it":
+          if not isPre and not (label in quotedVars):
+            let labelNode = newIdentNode(label)
+            if (b[1].kind == nnkIdent): # symbol name was explicitly given
+              let s = b[1]
+              let q = quote:
+                let `labelNode`= `s`
+              b[1] = newEmptyNode()
+              result.add(q)
+            else:
+              # generate symbol
+              let nsk = if a.kind == nnkVarSection: nskVar else: nskLet
+              let q = quote:
+                let `labelNode` = genSym(NimSymKind(`nsk`), `label`)
+              result.add(q)
+          quotedVars[label] = label
+    else:
+      let c = b.replaceVarDefs(quotedVars, isPre)
+      if c.len > 0:
+        result.add(c)
+
+## Parse the given Zero-DSL and create an inlineXyz function.
+## E.g. `zf_inline index(): ...` will create `proc inlineIndex(ext: ExtNimNode)`.
+## The DSL parses the content for the following sections:
+## - pre: prepare used variables - also manipulated ext, when default behaviour is not sufficient.
+##        as zero DSL has limitations when creating code the pre-section can be used to 
+##        circumvent these deficiencies
+## - init: initialize variables used in the loop
+## - loop: the main part that is running within the loop
+## - delegate: delegates this function call to another function (created with zero-DSL) - possibly with changed parameters
+## - end: section added at the end of the loop
+## - final: section added at the end of the function
+##
+## So in general it looks like this - in the overall generated code
+## <pre-section> with definitions - referenced in the other sections
+##
+## # init section
+## var myVar = 0
+## # the actual loop
+## for it in a:
+##   # added loop section somewhere here
+##   ...
+##   # end loop around here
+##   ...
+## # final section
+proc zeroParse(header: NimNode, body: NimNode): NimNode =
+  if header.kind == nnkCall and body.kind == nnkStmtList:
+    var funDef = header
+    let funName = funDef.label
+    # when this function has been called with zf_inline_call the "__call__" has to be stripped for the actual zero function name
+    if funName.endswith("__call__"):
+      let n = funName[0..^9]
+      if not (n in zfFunctionNames):
+        zfFunctionNames.add(n)
+    else:
+      zfFunctionNames.add(funName)
+
+    let procName = newIdentNode("inline" & funName.capitalizeAscii())
+    # parameters given to the zero function
+    var paramSection = nnkStmtList.newTree()
+    # referenced variables are added here
+    # this contains common definitions for all sections
+    let letSection = nnkStmtList.newTree()
+    # reference to the 'ext' parameter of the created proc
+    let ext = newIdentNode("ext")
+    var quotedVars = initTable[string,string]()
+    letSection.add(body.replaceVarDefs(quotedVars))
+    let numArgs = funDef.len-1      
+    let hasPre = body[0].label == "pre"
+    let firstSym = if funDef.len > 1: funDef[1].label else: ""
+    let chk = 
+      if firstSym == "_":
+        nnkStmtList.newTree()
+      else:
+        quote:
+          if `numArgs` < `ext`.node.len-1:
+            zfFail("too many arguments in '$1', got $2 but expected only $3" % [`ext`.node.repr, $(`ext`.node.len-1), $`numArgs`])
+    if not hasPre:
+      paramSection.add(chk)
+
+    if funDef.kind == nnkCall:
+      for i in 1..numArgs:
+        var defaultVal: NimNode = nil
+        var symName = funDef[i].label
+        let hasDefault = funDef[i].kind == nnkExprEqExpr
+        if hasDefault:
+          defaultVal = funDef[i][1]
+          symName = funDef[i][0].label
+        let sym = newIdentNode(symName)
+        quotedVars[symName] = symName
+        let q = quote:
+          let `sym` =
+            if `i` < `ext`.node.len: 
+              adapt(`ext`, `i`)
+            else:
+              when `hasDefault`:
+                quote:
+                  `defaultVal`
+              else:
+                when `symName` != "":
+                  when `symName` == "_":
+                    zfFail("'$1' needs at least 1 parameter!" % [`funName`])
+                  else:
+                    zfFail("missing argument '$1' for '$2'" % [`symName`, `funName`])
+                newIntLitNode(0)
+        paramSection.add(q)        
+    
+    let hasResult = body.findNode(nnkIdent, "result") != nil 
+    if hasResult:
+      let res = newIdentNode("resultIdent")
+      let q = quote:
+        let `res` = newIdentNode("result")
+      letSection.add(q)
+      quotedVars["result"] = "resultIdent"
+    if hasResult or body.findNode(nnkReturnStmt) != nil:
+      let q = quote:
+        if not `ext`.isLastItem:
+          zfFail("'$1' has a result and must be last item in chain!" % `funName`)
+      letSection.add(q)
+    else:
+      # register iterator as sequence handler
+      zfAddSequenceHandlers(funName)
+      
+    if body.findNode(nnkIdent, zfIndexVariableName) != nil:
+      let idxIdent = newIdentNode("idxIdent")
+      let q = quote:
+        let `idxIdent` = newIdentNode(`zfIndexVariableName`)
+        discard(`idxIdent`)
+        `ext`.needsIndex = true
+      letSection.add(q)
+      quotedVars[zfIndexVariableName] = "idxIdent"
+    
+    # replace it in 'it = ...' with `nextIt` and create the next iterator
+    if body.replaceIt(nnkAccQuoted.newTree(newIdentNode("nextIdent")), true):
+      let nextIt = newIdentNode("nextIdent")
+      let q = quote:
+        let `nextIt` = `ext`.nextItNode()
+      letSection.add(q)
+    
+    # access the previous iterator replacing 'it'
+    if body.replaceIt(nnkAccQuoted.newTree(newIdentNode("prevIdent")), false):
+      let prev = newIdentNode("prevIdent")
+      let q = quote:
+        let `prev` = `ext`.prevItNode()
+      letSection.add(q)
+    
+    # create the proc
+    let q = quote:
+      proc `procName`( `ext`: ExtNimnode) {.compileTime.} =
+        `paramSection`
+        `letSection`
+        nil
+
+    let code = q.getStmtList()
+
+    var firstDelegate = true
+    # generate the code sections
+    for i in 0..<body.len:
+      let tpe = body[i].label
+      let cmd = body[i][1]
+      if (i == 0 and not hasPre) or (i == 1 and hasPre):
+        # only do this check after "pre" = prepare section
+        if hasPre:
+          code.add(chk)
+        # all variables defined in the body have to be uniquely referenced 
+        # - independent from the code section they are located in
+        body.addQuotes(quotedVars)
+      let qCmd = 
+        case tpe:
+        of "pre":
+          quote:
+            `cmd`
+        of "init":
+          quote:
+            let i = quote:
+              `cmd`
+            `ext`.initials.add(i)
+        of "loop":
+          quote:
+            `ext`.node = quote:
+              `cmd`
+        of "delegate":
+          assert(firstDelegate, "only one delegate supported")
+          firstDelegate = false
+          let label = cmd[0][0].label
+          let inlineCmd = newIdentNode("inline" & label.capitalizeAscii())     
+          let p = newCall(label)
+          for i in 1..<cmd[0].len:
+            p.add(cmd[0][i])
+          quote:
+            `ext`.node = quote:
+              `p`
+            `inlineCmd`(`ext`)
+        of "end":
+          quote:
+            let e = quote:
+              `cmd`
+            `ext`.endLoop.add(e)
+        of "final":
+          quote:
+            let f = quote:
+              `cmd`
+            `ext`.finals.add(f)
+        else:
+          assert(false, "unsupported keyword: " & tpe)
+          nil
+      code.add(qCmd)
+    result = q
+  else:
+    assert(false, "did not expect " & $header.kind & " or " & $body.kind)
+
+# alternative syntax still possible
+macro zero*(a: untyped): untyped = 
+  let body = nnkStmtList.newTree()
+  for i in 1..<a.len:
+    body.add(a[i])
+  result = zeroParse(a[0], body)
+
+macro zfInline*(header: untyped, body:untyped): untyped =
+  result = zeroParse(header, body)
+macro zfInlineInner*(header: untyped, body: untyped): untyped =
+  result = zeroParse(header, body)
+macro zfInlineDbg*(header: untyped, body:untyped): untyped =
+  result = zeroParse(header, body)
+  echo(result.repr)
+macro zfIteratorDbg*(header: untyped, body:untyped): untyped =
+  #echo(body.treeRepr)
+  result = zeroParse(header, body)
+  echo(result.repr)
+macro zfInlineCall(header: untyped, body: untyped): untyped =
+  assert(header.kind == nnkCall)
+  header[0] = newIdentNode(header.label & "__call__")
+  let fun = newIdentNode("inline" & header.label.capitalizeAscii())
+  let ext = newIdentNode("ext")
+  let q = zeroParse(header, body)
+  result = quote:
+    `q`
+    `fun`(`ext`)
+
 ## Implementation of the 'map' command.
 ## Each element of the input is mapped to a given function.
 zf_inline map(f):
@@ -1476,7 +1757,6 @@ proc iterHandler(args: NimNode, debug: bool, td: string): NimNode {.compileTime.
   
   let codeStart = nnkStmtList.newTree()
   var code = codeStart
-
   var init = code
   let initials = nnkStmtList.newTree()
   let varDef = nnkStmtList.newTree()
