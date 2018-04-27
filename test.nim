@@ -504,7 +504,6 @@ suite "valid chains":
     # some things are not possible or won't compile
     let fArray = [[1,2,3], [4,5,6]]
     let fList = fArray --> map(it) --> to(list)
-    let fListFlattened = fList --> flatten() --> to(list)
     let fSeq = @[1,2,3,4,5,6]
     
     # flatten defaults to seq output if not explicitly set to the output format (except DoublyLinkedList)

@@ -283,8 +283,7 @@ proc replaceChainBy*(ext: ExtNimNode, commands: varargs[string]) : seq[NimNode] 
   if not found:
     zfFail("label '$1' not found!" % label)
   for idx in argIdx..<argIdx + commands.len:
-    let cmd = commands[idx-argIdx]
-    let node = newCall(cmd)
+    let node = newCall(commands[idx-argIdx])
     ext.args.insert(idx+1, node)
     result.add(node)
 
@@ -343,7 +342,7 @@ proc mkItNode*(index: int) : NimNode {.compileTime.} =
 
 proc nextItNode*(ext: ExtNimNode) : NimNode {.compileTime.} =
   if ext.adapted != -1 and ext.adapted != ext.prevItIndex:
-    zfFail("ext has already been adapted! Call (all) nextItNode _before_ calling adapt or use adaptPrev for the previous iterator!")
+    zfFail("ext has already been adapted! Call (all) nextItNode _before_ calling adapt!")
   result = mkItNode(ext.itIndex)
   ext.itIndex += 1
 
@@ -385,22 +384,12 @@ proc adapt*(ext: ExtNimNode, index=1, inFold=false): NimNode {.compileTime.} =
     zfFail("ext has already been adapted with a different index!")
     result = ext.node[index]
 
-## Shortcut for `node.adapt()` using the previous iterator variable.
-## Variable names like `it` or `idx` are replaced by their internal (unique) presentations.
-proc adaptPrev*(ext: ExtNimNode, index=1, inFold=false): NimNode {.compileTime.} =
-  if ext.adapted == -1:
-    ext.adapted = ext.prevItIndex
-    result = ext.node[index].adapt(ext.prevItIndex, inFold)
-  else:
-    if not (ext.adapted == ext.prevItIndex):
-      zfFail("ext has already been adapted with a different index!")
-    result = ext.node[index]
-
 ## Gets the parameters for the current function and replaces `it` references by internal variable names.
 proc getParams*(ext: ExtNimNode) : seq[NimNode] =
   result = @[]
   for idx in 1..<ext.node.len:
     result.add(ext.node[idx].adapt(ext.prevItIndex))
+  ext.adapted = ext.prevItIndex
 
 ## Returns true if the input collection type is a `DoublyLinkedList` or a `SinglyLinkedList`.
 proc isListType*(ext: ExtNimNode): bool = 
@@ -475,24 +464,21 @@ proc replaceVarDefs(a: NimNode, quotedVars: var Table[string,string], preSection
   let isPre = preSection or (a.kind == nnkCall and a[0].label == "pre")
   for b in a:
     if (a.kind == nnkVarSection or a.kind == nnkLetSection) and b.kind == nnkIdentDefs:
-      if b[0].kind == nnkIdent: # Correct? Or: sym also??
-        let label = b[0].label
-        if label != "idx" and label != "it":
-          if not isPre and not (label in quotedVars):
-            let labelNode = newIdentNode(label)
-            if (b[1].kind == nnkIdent): # symbol name was explicitly given
-              let s = b[1]
-              let q = quote:
-                let `labelNode`= `s`
-              b[1] = newEmptyNode()
-              result.add(q)
-            else:
-              # generate symbol
-              let nsk = if a.kind == nnkVarSection: nskVar else: nskLet
-              let q = quote:
-                let `labelNode` = genSym(NimSymKind(`nsk`), `label`)
-              result.add(q)
-          quotedVars[label] = label
+      let label = b[0].label
+      if label != "" and label != "idx" and label != "it":
+        if not isPre and not (label in quotedVars):
+          let labelNode = newIdentNode(label)
+          if (b[1].kind == nnkIdent): # symbol name was explicitly given
+            let s = b[1]
+            result.add quote do:
+              let `labelNode`= `s`
+            b[1] = newEmptyNode()
+          else:
+            # generate symbol
+            let nsk = if a.kind == nnkVarSection: nskVar else: nskLet
+            result.add quote do:
+              let `labelNode` = genSym(NimSymKind(`nsk`), `label`)
+        quotedVars[label] = label
     else:
       let c = b.replaceVarDefs(quotedVars, isPre)
       if c.len > 0:
@@ -748,7 +734,6 @@ zf_inline indexedFlatten():
       let idx = idxFlatten
       discard(idx)
 
-
 ## Implementation of the `takeWhile` command.
 ## `takeWhile(cond)` : Take all elements as long as the given condition is true.
 zf_inline takeWhile(cond):
@@ -794,7 +779,6 @@ zf_inline drop(count):
 ## e.g. `a --> sub(0,1)` would contain the first 2 elements of a.
 ## In sub also Backward indices (e.g. ^1) can be used.
 proc inlineSub(ext: ExtNimNode) {.compileTime.} =
-  # sub is re-routed as filter implementation
   let minIndex = ext.node[1]
   if ext.node.len == 2:
     # only one parameter: same as drop
@@ -1139,7 +1123,6 @@ type
     currentIt: V
     currentIdx: Natural
     length: int
-  StopIteration* = object of Exception
   
   ## Helper to allow `[]` access for slices
   MkSliceIndexable[T] = ref object
@@ -1157,7 +1140,7 @@ proc `[]`*[T,U,V] (items: var MkListIndexable[T,U,V], idx: Natural): T =
     items.currentIt = items.currentIt.next
     items.currentIdx += 1
   if items.currentIt == nil:
-    raise newException(StopIteration, "index too large!")
+    return nil
   items.currentIdx += 1
   let value = items.currentIt.value
   items.currentIt = items.currentIt.next
@@ -1297,14 +1280,13 @@ proc createIteratorFunction(args: NimNode): NimNode =
 proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool, resultType: string, td: string, loopDef: NimNode, forceSeq: bool, isIter: bool): NimNode =
   var (resType, explicitType) = getResType(resultType, td)
   var collType = if resType != nil: resType.repr else: td
-  let toSeq = (resultType != nil and (resultType == "seq" or resultType.startswith("seq[")))
 
   var hasIter = false
   var itFun: NimNode = nil
   var itDef: NimNode = nil
 
   if isSeq and not isIter and (resType != nil or forceSeq):
-    if not explicitType and (collType.find("[") != -1 or toSeq or forceSeq):
+    if not explicitType and (collType.find("[") != -1 or forceSeq):
       hasIter = true
       itFun = args.createIteratorFunction()
       itFun.getStmtList().add(loopDef)
@@ -1336,8 +1318,7 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool, resultType: str
       listRef = listRef.findNode(nnkPar)[0][0]
     
     let i = collType.find("[")
-    let toSeq = (resultType != nil and (resultType == "seq" or resultType.startswith("seq[")))
-    if i != -1 and not toSeq and hasIter and (not forceSeq or resultType != nil):
+    if i != -1 and hasIter and (not forceSeq or resultType != nil):
       collType = collType[0..i-1]
       let collSym = parseExpr(collType)
       let resDef =
@@ -1350,7 +1331,7 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool, resultType: str
       code = quote:
         var res: `resDef`
         `resultIdent` = zfInit(res)
-    elif (forceSeq or toSeq) and hasIter:
+    elif forceSeq and hasIter:
       code = quote:
         var res: seq[iteratorType(`itDef`)]
         `resultIdent` = zfInit(res)
@@ -1370,11 +1351,7 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool, resultType: str
         addLoop = addLoop.copyNimTree()
       # there should only be one yield statement - replace it with zfAddItem
       let (yieldStmt,path) = addLoop.findNodePath(nnkYieldStmt)
-      let yieldRepl = addLoop.apply(path, ext.addElemResult(yieldStmt[0]))
-      if hasIteratorBug:
-        code.add(yieldRepl)
-      else:
-        code = nil
+      code.add(addLoop.apply(path, ext.addElemResult(yieldStmt[0])))
     else:
       let it = newIdentNode(internalIteratorName)
       code.add quote do:
@@ -1702,8 +1679,3 @@ macro `-->>`*(a: untyped, b: untyped): untyped =
       delegateArrow(type(`a`), `a`, `b`, true)
   else:
     result = delegateMacro(a, b, true, "seq")
-
-when isMainModule:
-  let  aArray = [4,8,-2]
-  #echo(a -->> filter(it > 0))
-  echo(aArray -->> to(list))
