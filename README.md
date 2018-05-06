@@ -461,7 +461,7 @@ The sections are:
 
 The above map will be translated to:
 ```nim
-proc inlineMap(ext: ExtNimNode) {.compileTime.} =
+proc inlineMap*(ext: ExtNimNode) {.compileTime.} =
   # do some parameter checks
   if ext.node.len - 1 > 1:
     zfFail("too many arguments in \'$1\', got $2 but expected only $3" %
@@ -480,7 +480,7 @@ proc inlineMap(ext: ExtNimNode) {.compileTime.} =
 
 The above `map` function also does not set a result - hence the result type is a collection result type, which can be determined automatically.
 
-While Zero-DSL is quite powerful, not all possibilities can be handled by it when implementing a function. For instance the `foreach` implementation is done completely manually and `reduce` and other functions use the macro `zf_inline_call` which provides Zero-DSL within a manual function implementation.
+While Zero-DSL is quite powerful, not all possibilities can be handled by it when implementing a function. For instance the `foreach` implementation is done completely manually and `reduce` and other functions use the macro `zf_inline_call` which provides Zero-DSL within a manual function implementation and also registers the function name.
 The signature for creating an inline function is as in the `inlineMap` example above - each function `foo` is implemented by its `inlineFoo*(ext: ExtNimNode)` counterpart.
 
 If the Zero-DSL should fail to create an own implementation of a function then `zf_inline_dbg` instead of `zf_inline` can be used to print the created function to the console, copy it - remember to add the `*` to the name - and adapt the code.
@@ -501,13 +501,13 @@ The `inline`-implementations should follow certain rules.
 - register functions that use neither `zf_inline` nor `zf_inline_call` using `zfAddFunction`
 - finally call `zfCreateExtension` after all `zf_inline...` definitions and `zfAddFunction` calls - before using the actual function implementation
 
-Example or count that sets a result:
+Example of `count` that sets a result:
 ```nim
 zf_inline count():
   init:
     result = 0
   loop:
-    result += 1
+    result += 1 # add one in each loop
 ```
 Functions that set a result in any section are considered final functions - no other function may follow.
 
