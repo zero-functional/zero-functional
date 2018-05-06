@@ -15,7 +15,7 @@ const minHighVariableName = "__minHigh__"
 const zfInternalIteratorName = "__autoIter__"
 
 # See bug https://github.com/nim-lang/Nim/issues/7787
-const hasIteratorBug = false
+const hasIteratorBug = true
 
 type 
 
