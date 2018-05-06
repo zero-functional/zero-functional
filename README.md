@@ -469,7 +469,7 @@ proc inlineMap(ext: ExtNimNode) {.compileTime.} =
   let f = 
     if ext.node.len > 1:
       adapt(ext, 1) # replace all occurences if internal iterator "it" with __it__0, __it__1, etc.
-	else: # assert that the argument 'f' is supplied
+    else: # assert that the argument 'f' is supplied
       zfFail("missing argument \'$1\' for \'$2\'" % ["f", "map"])
       newIntLitNode(0)
   let nextIdent = ext.nextItNode() # create the next iterator
