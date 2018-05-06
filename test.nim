@@ -134,9 +134,8 @@ zf_inline intersect(_):
 
 ## Registers the extensions for the user commands during compile time
 macro registerExtension(): untyped =
-  # the command intersect results in sequences and was not implemented with zf_iterator, 
-  # hence it should be specifically registered.
-  zfCreateExtension(@["intersect"])
+  # register all extensions that have been defined with the zf_inline macro
+  zfCreateExtension()
 
 ## Macro that checks that the expression compiles
 ## Calls "check"
@@ -362,7 +361,7 @@ suite "valid chains":
     check((aArray --> map(it + 2) --> mapSeq(it * 2)) == @[8, 20, -4])
 
   test "array sub":
-    check((aArray--> sub(1)) == [0, 8, -4])
+    check((aArray --> sub(1)) == [0, 8, -4])
     check((aArray --> sub(1,1)) == [0, 8, 0])
     check((aArray --> sub(1,^2)) == [0, 8, 0])
 
@@ -421,7 +420,7 @@ suite "valid chains":
   test "generic filter":
     let p = Pack(rows: @[0,1,2,3])
     check((p --> filterSeq(it != 0)) == @[1,2,3]) 
-    check((p --> filter(it != 0)).rows ==  @[1,2,3])
+    check((p --> filter(it != 0)).rows == @[1,2,3])
     
   test "empty":
     let e : seq[int] = @[]
@@ -437,7 +436,7 @@ suite "valid chains":
     let f2 = @[@["1","2","3"],@["4","5"],@["6"]]
     check((f2 --> flatten()) == @["1","2","3","4","5","6"])
     # indexedFlatten attaches the index of the element within the sub-list - that now has been flattened
-    check(f --> indexedFlatten()            == @[(0,1),(1,2),(2,3),(0,4),(1,5),(0,6)])
+    check(f --> indexedFlatten() == @[(0,1),(1,2),(2,3),(0,4),(1,5),(0,6)])
     # this is not the same as:
     check(f --> flatten() --> map((idx,it)) == @[(0,1),(1,2),(2,3),(3,4),(4,5),(5,6)])
 
@@ -508,7 +507,7 @@ suite "valid chains":
   test "rejected missing add function":
     let p2 = PackWoAdd(rows: @[0,1,2,3])
     # PackWoAdd as iterable does not define the add method (or append) - hence this won't compile
-    reject((p2 --> filter(it != 0)).rows ==  @[1,2,3], 
+    reject((p2 --> filter(it != 0)).rows == @[1,2,3], 
             "Need either 'add' or 'append' implemented in 'PackWoAdd' to add elements") 
     # forced to seq -> compiles
     accept((p2 --> filter(it != 0) --> to(seq)) == @[1,2,3])
@@ -573,7 +572,7 @@ suite "valid chains":
     # si needs access with []
     reject(zip(si, a) --> map(it[0]+it[1]) == @[3,10,-1], 
             "need to provide an own implementation for mkIndexable(SimpleIter)") 
-    accept(si --> map((it, a[idx])) -->  map(it[0]+it[1]) == @[3,10,-1]) # this will work
+    accept(si --> map((it, a[idx])) --> map(it[0]+it[1]) == @[3,10,-1]) # this will work
     # si needs `[]` and high - we do that now...
     reject(zip(a,si) --> map(it), "need to provide an own implementation for mkIndexable(SimpleIter)") 
     proc `[]`(si: SimpleIter, idx: int) : int = si.items[idx]
@@ -655,11 +654,11 @@ suite "valid chains":
     let a1 = @[1,-2,3,-4,5]
     let a2 = @[1,4,-2,-3,6]
     # first zip, then multiply with each other @[1,-8,6,-12,30], then filter > 0, then sum up
-    check(zip(a1,a2) --> map(it[0]*it[1]) --> filter(it > 0) --> fold(0, a + it)         == 43)
+    check(zip(a1,a2) --> map(it[0]*it[1]) --> filter(it > 0) --> fold(0, a + it) == 43)
     # internally zip(a1,a2) --> ... is already translated to a1 --> map((a1[idx],a2[idx])) which is roughly the same as  
     check(a1 --> map((a1[idx], a2[idx])) --> map(it[0]*it[1]) --> filter(it > 0) --> fold(0, a + it) == 43)
     # this is not the same - filtering the input seq for positive values only
-    check(a1 --> filter(it > 0) --> zip(a2) --> map(it[0]*it[1]) --> fold(0, a + it)  == 25)
+    check(a1 --> filter(it > 0) --> zip(a2) --> map(it[0]*it[1]) --> fold(0, a + it) == 25)
     
     # the right hand side of zip is more flexible - you could also use expressions with `it`:
     check(a1 --> filter(it > 0).
@@ -675,7 +674,7 @@ suite "valid chains":
     check(arr --> filter(it < 10) --> max() == 9)
     check(arr --> filter(it < 7) --> indexedMax() == (0,3))
     # sumIdx does not make much sense - here the index of the last added element 8 is 5, the sum is 28 
-    check(arr --> filter(it > 7) --> indexedSum()  == (5,28))
+    check(arr --> filter(it > 7) --> indexedSum() == (5,28))
     check(arr --> filter(it > 7) --> product() == 792)
   
   test "drop, take, dropWhile, takeWhile":
@@ -773,7 +772,7 @@ suite "valid chains":
     check(a --> intersect(b,c) == @[4,9])
 
     # increment a by 1 and by 2
-    check(a --> inc() ==  @[2,5,4,3,6,10])
+    check(a --> inc() == @[2,5,4,3,6,10])
     check(a --> inc(2) == @[3,6,5,4,7,11])
     # get all elements that are not 1 when modulo 4 is applied
     check(a --> filterNot(it mod 4 == 1) == @[4,3,2])

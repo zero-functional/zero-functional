@@ -98,7 +98,7 @@ proc zfGetLastFailure*() : string {.compileTime.} =
 ## Called when some failure is detected during macro processing. 
 proc zfFail*(msg: string) {.compileTime.} =
   lastFailure = msg
-  assert(false, ": " & msg)
+  doAssert(false, ": " & msg)
 
 ## This is the default extension complaining when a given function was not found.
 proc extendDefault(ext: ExtNimNode) : ExtNimNode {.compileTime.} =
@@ -109,6 +109,13 @@ proc extendDefault(ext: ExtNimNode) : ExtNimNode {.compileTime.} =
 ## See `test.nim` for an example of how to do that.
 var zfExtension {.compileTime.} : proc(ext: ExtNimNode): ExtNimNode = extendDefault
 var zfFunctionNames {.compileTime} : seq[string] = @[]
+
+## Adds the given function name to the internal table of supported functions.
+## This will be done automatically when using the macros `zf_inline` or `zf_inline_call`.
+proc zfAddFunction*(functionName: string) {.compileTime.} =
+  if functionName in zfFunctionNames:
+    zfFail("Function $1 is already defined!" % (functionName))
+  zfFunctionNames.add(functionName)
 
 ## Set the extension method.
 ## The extension method will be automatically created and registered using `zfRegister` or `zfRegisterExt`
@@ -136,6 +143,8 @@ proc findNode*(node: NimNode, kind: NimNodeKind, content: string = nil) : NimNod
 ## Creates the extension function
 proc createExtensionProc(name: string, cmdSeq: seq[string]): (NimNode,NimNode) = 
   let procName = newIdentNode("zfExtend" & name)
+  # add inlineForeach manually
+  zfAddFunction($Command.foreach)
   let cseq = if cmdSeq != nil: cmdSeq else: zfFunctionNames
   let ext = newIdentNode("ext")
   let resultIdent = newIdentNode("result")
@@ -158,14 +167,14 @@ proc createExtensionProc(name: string, cmdSeq: seq[string]): (NimNode,NimNode) =
   caseStmt.add(ofElse.findNode(nnkElse))
   result = (procDef, procName)
 
-## Create a delegate function for the given enum.
-## For each member `m` of that enum, the function `inlineM` has to be created.
+## Create a delegate function for user-defined functions.
 macro zfCreateExtension*(): untyped =
   let (funDef,funName) = createExtensionProc("UserExt", nil)
   result = quote:
     `funDef`
     zfSetExtension(`funName`)
 
+## Create a delegate function for user-defined functions and register sequence handler functions.
 macro zfCreateExtension*(seqHandlers: static[seq[string]]): untyped =
   zfAddSequenceHandlers(seqHandlers)
   result = quote:
@@ -497,9 +506,9 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
     if funName.endswith("__call__"):
       let n = funName[0..^9]
       if not (n in zfFunctionNames):
-        zfFunctionNames.add(n)
+        zfAddFunction(n) # only add it once
     else:
-      zfFunctionNames.add(funName)
+      zfAddFunction(funName)
 
     let procName = newIdentNode("inline" & funName.capitalizeAscii())
     # parameters given to the zero function
@@ -611,20 +620,20 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
         code.add quote do:
           `cmd`
       of "init":
-        assert(not hasDelegate, "delegate cannot be used together with init or loop")
+        doAssert(not hasDelegate, "delegate cannot be used together with init or loop")
         code.add quote do:
           let i = quote:
             `cmd`
           `ext`.initials.add(i)
       of "loop":
         hasLoop = true
-        assert(not hasDelegate, "delegate cannot be used together with init or loop")
+        doAssert(not hasDelegate, "delegate cannot be used together with init or loop")
         code.add quote do:
           `ext`.node = quote:
             `cmd`
       of "delegate":
         hasDelegate = true
-        assert(not hasLoop, "delegate cannot be used together with loop")
+        doAssert(not hasLoop, "delegate cannot be used together with loop")
         let oldParams = newIdentNode("oldParams")
         let isLast = newIdentNode("isLast")
         let isLastCmd = newIdentNode("isLastCmd")
@@ -659,10 +668,10 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
             `cmd`
           `ext`.finals.add(f)
       else:
-        assert(false, "unsupported keyword: " & tpe)
+        doAssert(false, "unsupported keyword: " & tpe)
     result = q
   else:
-    assert(false, "did not expect " & $header.kind & " or " & $body.kind)
+    doAssert(false, "did not expect " & $header.kind & " or " & $body.kind)
 
 # alternative syntax still possible
 macro zero*(a: untyped): untyped = 
@@ -671,19 +680,22 @@ macro zero*(a: untyped): untyped =
     body.add(a[i])
   result = zeroParse(a[0], body)
 
-macro zfInline*(header: untyped, body:untyped): untyped =
+## Initate the Zero-DSL definition of an inline function.
+## The macro expects the function name, its parameters (in brackets) and the body to implement in different sections.
+## See zeroParse.
+macro zf_inline*(header: untyped, body: untyped): untyped =
   result = zeroParse(header, body)
-macro zfInlineInner*(header: untyped, body: untyped): untyped =
-  result = zeroParse(header, body)
-macro zfInlineDbg*(header: untyped, body:untyped): untyped =
+
+## Helper that prints the created inline function.
+## Useful when Zero-DSL cannot be used for the whole implementation of an inline function.
+macro zf_inline_dbg*(header: untyped, body:untyped): untyped =
   result = zeroParse(header, body)
   echo(result.repr)
-macro zfIteratorDbg*(header: untyped, body:untyped): untyped =
-  #echo(body.treeRepr)
-  result = zeroParse(header, body)
-  echo(result.repr)
-macro zfInlineCall(header: untyped, body: untyped): untyped =
-  assert(header.kind == nnkCall)
+
+## calls zf_inline registering the function call and calls the actual function.
+## This can be used to add own implementations of inline-functions with parts in Zero-DSL.
+macro zf_inline_call*(header: untyped, body: untyped): untyped =
+  doAssert(header.kind == nnkCall)
   header[0] = newIdentNode(header.label & "__call__")
   let fun = newIdentNode("inline" & header.label.capitalizeAscii())
   let ext = newIdentNode("ext")
@@ -844,7 +856,7 @@ proc findParentWithChildLabeled(node: NimNode, label: string): NimNode =
 ## Implementation of the 'foreach' command.
 ## A command may be called on each element of the input list.
 ## Changing the list in-place is also supported.
-proc inlineForeach(ext: ExtNimNode) {.compileTime.} =
+proc inlineForeach*(ext: ExtNimNode) {.compileTime.} =
   var adaptedExpression = ext.adapt()
   
   # special case: assignment to iterator -> try to assign to outer list (if possible)
@@ -1089,13 +1101,11 @@ proc inlineElement(ext: ExtNimNode) {.compileTime.} =
     return # command has been handled
   if ext.node.kind == nnkCall and (ext.itIndex > 0):
     case label:
-    of $Command.foreach:
-      ext.inlineForeach()
+    of "any":
+      warning("any is deprecated - use exists instead")
+      ext.inlineExists()
     else:
-      if "any" == label:
-        warning("any is deprecated - use exists instead")
-        ext.inlineExists()
-      elif (label.toReduceCommand() != none(ReduceCommand)):
+      if (label.toReduceCommand() != none(ReduceCommand)):
         ext.inlineReduce()
       elif label != "":
         let res = zfExtension(ext)

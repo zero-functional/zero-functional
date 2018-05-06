@@ -446,18 +446,18 @@ Example - implement the map function:
 ```nim
 zf_inline map(f):
   loop:
-    let it = f
+    let it = f # create the next iterator in the loop setting it to the given parameter of the map function
 ```
 
 `zf_inline` is the actual macro that takes the created function name (here: map) and its parameters and a body with different sections as input.
 
 The sections are:
 - `pre` prepare section: initialize variables and constants
-- `init` variable initialization before the loop (ext.initials)
+- `init` variable initialization before the loop
 - `loop` the actual loop action (ext.node)
 - `delegate` delegate to other functions (like map, filter, etc.)
 - `end` added to end of the loop (ext.endLoop) - maybe not necessary
-- `final` after the loop section - e.g. to set the result (ext.finals)
+- `final` after the loop section - e.g. to set the result
 
 The above map will be translated to:
 ```nim
@@ -489,15 +489,17 @@ The `inline`-implementations should follow certain rules.
 - `ext: ExtNimNode` as parameter
 - ExtNimNode should be used when implementing the functions with some helpers:
   - `ext.node` = place here the actual code being generated inside the current block 
-	initially `ext.node` contains the current function call and its parameters
-  - `ext.initials` = add the initialization code for variable definitions
-  - `ext.endLoop` = add code that can be inserted at the end of the loop
-  - `ext.finals` = add code after the loop - e.g. to calculate a result
+	initially `ext.node` contains the current function call and its parameters (section: loop)
+  - `ext.initials` = add the initialization code for variable definitions (section: init)
+  - `ext.endLoop` = add code that can be inserted at the end of the loop (section: end)
+  - `ext.finals` = add code after the loop - e.g. to calculate a result (section: final)
   - `ext.res` = helper: access to the function's result
   - `ext.prevItNode()` = access to the iterator generated in the previous statement or loop
   - `ext.nextItNode()` = generates a new iterator for the current block. This is the (intermediate) result of the current operation that can be used with the next function
-- check of parameters / number of parameters has to be done in the implementation (e.g. by using ext.getParams())
+- check of parameters / number of parameters has to be done in the implementation 
 - use `zfFail()` if any checks fail
+- register functions that use neither `zf_inline` nor `zf_inline_call` using `zfAddFunction`
+- finally call `zfCreateExtension` after all `zf_inline...` definitions and `zfAddFunction` calls - before using the actual function implementation
 
 Example or count that sets a result:
 ```nim
