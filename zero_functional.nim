@@ -31,6 +31,7 @@ type
 
   ExtNimNode* = ref object ## Store additional info the current NimNode used in the inline... functions
     node*: NimNode     ## the current working node / the current function
+    nodeIndex: int     ## the position in args of the current working node
     prevItIndex*: int  ## index used for the previous iterator 
     itIndex*: int      ## index used for the created iterator - 0 for the first. Will be incremented automatically. 
     isLastItem: bool   ## true if the current item is the last item in the command chain
@@ -251,7 +252,7 @@ proc zfAddItem*[T](a: var Appendable[T], idx: int, item: T) =
 
 ## Shortcut and safe way to get the ident label of a node
 proc label(node: NimNode): string = 
-  if node.kind == nnkCall:
+  if node.kind == nnkCall or node.kind == nnkOpenSymChoice:
     node[0].label
   elif node.kind == nnkIdent or node.kind == nnkSym:
     $node
@@ -261,31 +262,6 @@ proc label(node: NimNode): string =
 ## Get the label of the current command.
 proc label*(ext: ExtNimNode): string =
   ext.node.label
-
-## Adds the given commands to the current command chain replacing the current element.
-## Returns a sequence of `NimNode` containing the empty parameters that probably will have to be filled using
-## the `add` function.
-proc replaceChainBy*(ext: ExtNimNode, commands: varargs[string]) : seq[NimNode] =
-  result = @[]
-  var argIdx = -1
-  let label = ext.label
-  var found = false
-  if not (label in SEQUENCE_HANDLERS)  and commands[^1] in SEQUENCE_HANDLERS:
-    zfFail("Command '$1' has to be registered as sequence handler as it is replaced by '$2' as last command - use 'zfCreateExtension'!" % [label, commands[^1]])
- 
-  for arg in ext.args:
-    argIdx += 1
-    if arg.kind == nnkCall and arg[0].label == label:
-      found = true
-      ext.args[argIdx][0] = newIdentNode("") # replace with dummy node
-      ext.isLastItem = false
-      break
-  if not found:
-    zfFail("label '$1' not found!" % label)
-  for idx in argIdx..<argIdx + commands.len:
-    let node = newCall(commands[idx-argIdx])
-    ext.args.insert(idx+1, node)
-    result.add(node)
 
 ## Replace the given identifier by the string expression
 proc replace(node: NimNode, searchNode: NimNode, replNode: NimNode): NimNode =
@@ -384,13 +360,6 @@ proc adapt*(ext: ExtNimNode, index=1, inFold=false): NimNode {.compileTime.} =
     zfFail("ext has already been adapted with a different index!")
     result = ext.node[index]
 
-## Gets the parameters for the current function and replaces `it` references by internal variable names.
-proc getParams*(ext: ExtNimNode) : seq[NimNode] =
-  result = @[]
-  for idx in 1..<ext.node.len:
-    result.add(ext.node[idx].adapt(ext.prevItIndex))
-  ext.adapted = ext.prevItIndex
-
 ## Returns true if the input collection type is a `DoublyLinkedList` or a `SinglyLinkedList`.
 proc isListType*(ext: ExtNimNode): bool = 
   ext.typeDescription.startswith("DoublyLinkedList") or ext.typeDescription.startswith("SinglyLinkedList")
@@ -484,6 +453,16 @@ proc replaceVarDefs(a: NimNode, quotedVars: var Table[string,string], preSection
       if c.len > 0:
         result.add(c)
 
+## Called when delegate section is used in Zero-DSL
+proc zfDelegate*(ext: ExtNimNode, caller: NimNode, delegateIndex: int) =
+  if ext.node.len == 2 and ext.node[1].label == "_":
+    # delegate default arguments
+    ext.node.del(1)
+    for i in 1..<caller.len:
+      ext.node.add(caller[i])
+  ext.args.insert(ext.nodeIndex + delegateIndex + 1, ext.node.copyNimTree())
+  ext.node = nnkStmtList.newTree()
+
 ## Parse the given Zero-DSL and create an inlineXyz function.
 ## E.g. `zf_inline index(): ...` will create `proc inlineIndex(ext: ExtNimNode)`.
 ## The DSL parses the content for the following sections:
@@ -511,6 +490,8 @@ proc replaceVarDefs(a: NimNode, quotedVars: var Table[string,string], preSection
 proc zeroParse(header: NimNode, body: NimNode): NimNode =
   if header.kind == nnkCall and body.kind == nnkStmtList:
     var funDef = header
+    var hasDelegate = false
+    var hasLoop = false
     let funName = funDef.label
     # when this function has been called with zf_inline_call the "__call__" has to be stripped for the actual zero function name
     if funName.endswith("__call__"):
@@ -552,7 +533,8 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
           defaultVal = funDef[i][1]
           symName = funDef[i][0].label
         let sym = newIdentNode(symName)
-        quotedVars[symName] = symName
+        if symName != "_":
+          quotedVars[symName] = symName
         paramSection.add quote do:
           let `sym` =
             if `i` < `ext`.node.len: 
@@ -590,17 +572,18 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
         discard(`idxIdent`)
         `ext`.needsIndex = true
       quotedVars[zfIndexVariableName] = "idxIdent"
-    
-    # replace it in 'it = ...' with `nextIt` and create the next iterator
-    if body.replaceIt(nnkAccQuoted.newTree(newIdentNode("nextIdent")), true):
-      let nextIt = newIdentNode("nextIdent")
-      letSection.add quote do:
-        let `nextIt` = `ext`.nextItNode()
-    # access the previous iterator replacing 'it'
-    if body.replaceIt(nnkAccQuoted.newTree(newIdentNode("prevIdent")), false):
-      let prev = newIdentNode("prevIdent")
-      letSection.add quote do:
-        let `prev` = `ext`.prevItNode()
+
+    if (not hasPre and body[0].label != "delegate") or body.len != 2 or body[1].label != "delegate": 
+      # replace it in 'it = ...' with `nextIt` and create the next iterator
+      if body.replaceIt(nnkAccQuoted.newTree(newIdentNode("nextIdent")), true):
+        let nextIt = newIdentNode("nextIdent")
+        letSection.add quote do:
+          let `nextIt` = `ext`.nextItNode()
+      # access the previous iterator replacing 'it'
+      if body.replaceIt(nnkAccQuoted.newTree(newIdentNode("prevIdent")), false):
+        let prev = newIdentNode("prevIdent")
+        letSection.add quote do:
+          let `prev` = `ext`.prevItNode()
 
     # create the proc
     let q = quote:
@@ -611,7 +594,6 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
 
     let code = q.getStmtList()
 
-    var firstDelegate = true
     # generate the code sections
     for i in 0..<body.len:
       let tpe = body[i].label
@@ -629,26 +611,43 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
         code.add quote do:
           `cmd`
       of "init":
+        assert(not hasDelegate, "delegate cannot be used together with init or loop")
         code.add quote do:
           let i = quote:
             `cmd`
           `ext`.initials.add(i)
       of "loop":
+        hasLoop = true
+        assert(not hasDelegate, "delegate cannot be used together with init or loop")
         code.add quote do:
           `ext`.node = quote:
             `cmd`
       of "delegate":
-        assert(firstDelegate, "only one delegate supported")
-        firstDelegate = false
-        let label = cmd[0][0].label
-        let inlineCmd = newIdentNode("inline" & label.capitalizeAscii())     
-        let p = newCall(label)
-        for i in 1..<cmd[0].len:
-          p.add(cmd[0][i])
+        hasDelegate = true
+        assert(not hasLoop, "delegate cannot be used together with loop")
+        let oldParams = newIdentNode("oldParams")
+        let isLast = newIdentNode("isLast")
+        let isLastCmd = newIdentNode("isLastCmd")
         code.add quote do:
-          `ext`.node = quote:
-            `p`
-          `inlineCmd`(`ext`)
+          let `isLast` = `ext`.isLastItem
+          var `isLastCmd` = false
+          let `oldParams` = `ext`.node
+        for cmdIdx in 0..<cmd.len:
+          let label = cmd[cmdIdx][0].label
+          let p = newCall(label)
+          for i in 1..<cmd[cmdIdx].len:
+            p.add(cmd[cmdIdx][i])
+          if cmdIdx == cmd.len-1:
+            code.add quote do:
+              `isLastCmd` = true
+          code.add quote do:
+            let caller = `ext`.node
+            `ext`.node = quote:
+              `p`
+            `ext`.isLastItem = `isLast` and `isLastCmd`
+            zfDelegate(`ext`, `oldParams`, `cmdIdx`)
+        code.add quote do:
+          discard(`oldParams`)
       of "end":
         code.add quote do:
           let e = quote:
@@ -977,9 +976,9 @@ proc inlineCombinations(ext: ExtNimNode) {.compileTime.} =
     if ext.isListType():
       zf_inline_call combinations():
         pre:
-          let itlist = newIdentNode(listIteratorName)
+          let itList = newIdentNode(listIteratorName)
         loop:
-          var itListInner = `itList`.next # todo - backticks should not be needed here! (but we get: undeclared field next)
+          var itListInner = itList.next
           var idxInner = idx
           while itListInner != nil:
             let `itCombo` = createCombination([it, itListInner.value], [idx, idxInner])
@@ -1070,7 +1069,7 @@ proc inlineSeq(ext: ExtNimNode) {.compileTime.} =
     ext.node = quote:
       for `itIdent` in `listRef`:
         nil
-  
+
 proc ensureFirst(ext: ExtNimNode) {.compileTime.} =
   if ext.itIndex > 0:
     error("$1 supposed to be first - index is $2" % [ext.label, $ext.itIndex], ext.node)
@@ -1098,7 +1097,7 @@ proc inlineElement(ext: ExtNimNode) {.compileTime.} =
         ext.inlineExists()
       elif (label.toReduceCommand() != none(ReduceCommand)):
         ext.inlineReduce()
-      else:
+      elif label != "":
         let res = zfExtension(ext)
         if res == nil:
           zfFail("add implementation for command '$1'" % label)
@@ -1472,25 +1471,26 @@ proc iterHandler(args: NimNode, debug: bool, td: string): NimNode {.compileTime.
   while argIdx < args.len: # args could be changed
     let arg = args[argIdx]
     let isLast = argIdx == args.len-1
-    argIdx += 1
     
     let cmdName = arg.label
     ext = ExtNimNode(node: arg, 
-                         prevItIndex: index-1,
-                         itIndex: index, 
-                         isLastItem: isLast,
-                         initials: initials,
-                         endLoop: endLoop,
-                         finals: finals,
-                         listRef: listRef,
-                         args: args,
-                         typeDescription: td,
-                         resultType: resultType,
-                         needsIndex: needsIndexVar,
-                         hasMinHigh: hasMinHigh,
-                         isIter: isIter,
-                         adapted: -1,
-                         elemAdded: false)
+                    nodeIndex: argIdx,                    
+                    prevItIndex: index-1,
+                    itIndex: index, 
+                    isLastItem: isLast,
+                    initials: initials,
+                    endLoop: endLoop,
+                    finals: finals,
+                    listRef: listRef,
+                    args: args,
+                    typeDescription: td,
+                    resultType: resultType,
+                    needsIndex: needsIndexVar,
+                    hasMinHigh: hasMinHigh,
+                    isIter: isIter,
+                    adapted: -1,
+                    elemAdded: false)
+    argIdx += 1
     ext.inlineElement()
     let newCode = ext.node.getStmtList()
     code.add(ext.node)

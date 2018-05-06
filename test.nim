@@ -109,40 +109,28 @@ zf_inline average():
     if countIdx > 0:
       result = sum / float(countIdx)
 
-# Own implementation of intersect command building the intersection of several collections.
-# Duplicates are not removed.
-# Unfortunetaly using `zf_inline` does not work here as
-# - intersect supports n parameters
 zf_inline intersect(_):
+# intersect from the example test case below:
+#   combinations(b,squaresPlusOne()). # combine all elements of a,b...
+#   map(c.it). # get the iterator contents of each combination (indices not relevant here)
+#   filter(it[0] == it[1] and it[0] == it[2]). # this is the trickier one
+#   map(it[0])
+
   pre:
-    # intersect from the example test case below:
-    # combinations(b,squaresPlusOne()). # combine all elements of a,b...
-    # map(c.it). # get the iterator contents of each combination (indices not relevant here)
-    # filter(it[0] == it[1] and it[0] == it[2]). # this is the trickier one
-    # map(it[0])
-    # parameters for new commands
-    let params = ext.replaceChainBy($Command.combinations, $Command.map, $Command.filter, $Command.map)
-    # parameters for current 'intersect' command: the collections to be intersected
-    let intersectParams = ext.getParams()
     let c = newIdentNode(zfCombinationsId)
     let itNode = newIdentNode(zfIteratorVariableName)
     # build the it[0] == it[1] and ... chain
     var chain = quote: true
-    for i in (1..intersectParams.len):
+    for i in (1..<ext.node.len):
       # ... and it[0] == it[i]
       chain = quote:
         `chain` and (`itNode`[0] == `itNode`[`i`])
 
-    # now insert the command parameters
-    # 1. combinations(b,c,...)
-    for p in intersectParams:
-      params[0].add(p) # use all parameters of `intersect` for the `combinations` command
-    # 2. map(c.it)
-    params[1].add quote do: `c`.it
-    # 3. filter(it[0] == it[1] and ...)
-    params[2].add(chain)
-    # 4. map(it[0])
-    params[3].add quote do: `itNode`[0]
+  delegate:
+    combinations(_) # all arguments of intersect are delegated to combinations
+    map(c.it)
+    filter(chain)
+    map(it[0])
 
 ## Registers the extensions for the user commands during compile time
 macro registerExtension(): untyped =
@@ -766,6 +754,7 @@ suite "valid chains":
   test "register own extension":
     let a = @[1,4,3,2,5,9]
     let b = @[7,1,8,9,4]
+    let c = @[9,4,2,3]
     # the own extensions are rejected when they have not been registered yet
     const errorMsg = " is unknown, you could provide your own implementation! See `zfCreateExtension`!"
     reject(a --> average() == 4.0, "average" & errorMsg)
@@ -781,6 +770,8 @@ suite "valid chains":
     # get all elements that are both in a and b
     check(a --> intersect(b) == @[1,4,9])
     check(a --> intersect(b,b) == @[1,4,9])
+    check(a --> intersect(b,c) == @[4,9])
+
     # increment a by 1 and by 2
     check(a --> inc() ==  @[2,5,4,3,6,10])
     check(a --> inc(2) == @[3,6,5,4,7,11])
