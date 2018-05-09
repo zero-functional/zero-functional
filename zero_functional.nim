@@ -50,8 +50,8 @@ type
 
   ## used for "combinations" command as output
   Combination*[A,T] = object
-    it: array[A,T]
-    idx: array[A,int]
+    it*: array[A,T]
+    idx*: array[A,int]
 
 type
   FiniteIndexable[T] = concept a
@@ -411,6 +411,8 @@ proc addQuotes(a: NimNode, quotedVars: Table[string,string]) =
         a[i] = nnkAccQuoted.newTree(newIdentNode(quotedVars[child.label]))
       else:
         child.addQuotes(quotedVars)
+      if a.kind == nnkDotExpr:
+        break # only quote left side of dot expressions
 
 ## Helper for Zero-DSL: replace all 'it' nodes by the next iterator (in let expressions when defining a new iterator)
 ## or by previous iterator. 
@@ -650,7 +652,6 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
             code.add quote do:
               `isLastCmd` = true
           code.add quote do:
-            let caller = `ext`.node
             `ext`.node = quote:
               `p`
             `ext`.isLastItem = `isLast` and `isLastCmd`
@@ -1563,8 +1564,7 @@ proc iterHandler(args: NimNode, debug: bool, td: string): NimNode {.compileTime.
         `preInit`
         nil
     result = q
-    code = q.getStmtList()
-    code.insert(0,codeStart)
+    code = q.getStmtList().add(codeStart)
   
   if (debug):
     echo("# " & repr(orig).replace(",", " -->"))

@@ -132,6 +132,22 @@ zf_inline intersect(_):
     filter(chain)
     map(it[0])
 
+zf_inline removeDoubles():
+# remove double elements. Code taken from example "remove doublettes" below
+  pre:
+    let listRef = ext.listRef
+    let c = newIdentNode(zfCombinationsId)
+  delegate:
+    # this actually only works only on th eoriginal list / iterator
+    combinations(listRef) # combine with itself - all elements
+    # this is the tricky one: remove later elements that already are in the list
+    # this actually translates in the inner for loop of combinations as:
+    # if c.idx[0] > c.idx[1] and c.it[0] == c.it[1]: break
+    takeWhile(not(c.it[0] == c.it[1] and c.idx[0] > c.idx[1])) 
+    # go back to the original elements
+    filter(c.idx[0] == c.idx[1]) 
+    map(c.it[0])
+
 ## Registers the extensions for the user commands during compile time
 macro registerExtension(): untyped =
   # register all extensions that have been defined with the zf_inline macro
@@ -781,3 +797,13 @@ suite "valid chains":
     reject(a --> filterNot(it != 0, it != 1), "too many arguments in 'filterNot(it != 0, it != 1)', got 2 but expected only 1")
     reject(a --> inc(1,2,3), "too many arguments in 'inc(1, 2, 3)', got 3 but expected only 1")
     reject(a --> intersect(), "'intersect' needs at least 1 parameter!")
+
+    check(@[1,2,1,1,3,2,1,1,4] --> removeDoubles() == @[1,2,3,4])
+
+  test "zip with other list":
+    let a = @[1,2,3]
+    let b = @[4,5,6]
+    var res: seq[int] = @[]
+    reject(zip(a,b) --> foreach(it[0] = it[0] + it[1]), "Adapted list cannot be changed in-place!")
+    zip(a,b) --> foreach(res.add(it[0] + it[1]))
+    check(res == @[5,7,9])
