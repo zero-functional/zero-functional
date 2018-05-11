@@ -414,7 +414,7 @@ Finally, it is possible to force the result type to the type given in `to` - whi
 This method is handled differently from the others and removed internally so the command before `to` is the actual last command.
 
 When the result type is given as `seq`, `array` or `list` (the latter is mapped to `DoublyLinkedList`) then the template argument can be determined automatically.
-However, when all auto detection fails, the result type may be given explicitly here - the resulting code is also a bit more efficient.
+However, when all auto detection fails, the result type may be given explicitly here - the resulting code is also a bit more efficient for the compilation process.
 
 ```nim
 check([1,2,3]) --> to(seq) == @[1,2,3])
@@ -425,8 +425,9 @@ echo(l2)
 
 ### iter
 
-When using `iter(name)` as last function then an iterator `name` is created and which can be used for further processing with zero-functional with only a small overhead.
+When using `iter(name)` as last function then an iterator `name` is created which can be used for further processing with zero-functional with only a small overhead.
 Similar to `to` this is also a virtual function which is internally replaced and only used to check the output type.
+The generated iterator is inline and can not be returned from a proc or given to another proc (see [Nim: Iterators](https://nim-lang.org/docs/manual.html#iterators-and-the-for-statement-first-class-iterators)).
 
 ```nim
 # filter all lines containing the word error in the iterator
@@ -452,7 +453,8 @@ zf_inline map(f):
 `zf_inline` is the actual macro that takes the created function name (here: map) and its parameters and a body with different sections as input.
 
 The sections are:
-- `pre` prepare section: initialize variables and constants
+- `pre` prepare section: initialize variables and constants 
+	- all variables that are used in other sections have to be defined here!
 - `init` variable initialization before the loop
 - `loop` the actual loop action (ext.node)
 - `delegate` delegate to other functions (like map, filter, etc.)
@@ -475,17 +477,38 @@ proc inlineMap*(ext: ExtNimNode) {.compileTime.} =
   let nextIdent = ext.nextItNode() # create the next iterator
   # the actual 'loop' section
   ext.node = quote:
-    let `nextIdent` = `f`
+    let `nextIdent` = `f` # here the `it` is replaced by the next iterator
 ```
 
 The above `map` function also does not set a result - hence the result type is a collection result type, which can be determined automatically.
+The `it` again is seen as keyword and the definition `let it = ...` will internally set the new iterator value which is consequently used by the next functions.
 
 While Zero-DSL is quite powerful, not all possibilities can be handled by it when implementing a function. For instance the `foreach` implementation is done completely manually and `reduce` and other functions use the macro `zf_inline_call` which provides Zero-DSL within a manual function implementation and also registers the function name.
 The signature for creating an inline function is as in the `inlineMap` example above - each function `foo` is implemented by its `inlineFoo*(ext: ExtNimNode)` counterpart.
 
 If the Zero-DSL should fail to create an own implementation of a function then `zf_inline_dbg` instead of `zf_inline` can be used to print the created function to the console, copy it - remember to add the `*` to the name - and adapt the code.
 
-The `inline`-implementations should follow certain rules. 
+It is possible to set parameter types for the functions - for example in the `index` implementation:
+```nim
+zf_inline index(cond: bool):
+  init:
+    result = -1 # index not found
+  loop:
+    if cond:
+      return idx
+```
+The `cond: bool` definition adds additional compile time checks to the generated macros, so that when using the index-function a compile error with the wrong parameter and the expected type is created.
+In this example also the `idx` variable is replaced automatically with the running index that is increment during the loop.
+
+Special variables for `zf_inline` statements are:
+- `it`: when used is the previous iterator, when defined with `let it = ` creates a new iterator
+- `idx`: the running index in the loop
+- `result`: the overall result and return type of the operation
+All other variables have to be defined in the `pre`-section, also when automatically assigned. 
+E.g. `combinations` sets a variable `c`, but when `combinations` is used in the `delegate` section, the variable `c` has to be defined in the `pre` section of the function that calls `combinations`.
+See `intersect` or `removeDoubles` implementation in [test.nim](test.nim) as an example.
+
+The manual `inline`-implementations should follow certain rules. 
 - `ext: ExtNimNode` as parameter
 - ExtNimNode should be used when implementing the functions with some helpers:
   - `ext.node` = place here the actual code being generated inside the current block 

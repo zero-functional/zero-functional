@@ -261,7 +261,7 @@ proc zfAddItem*[T](a: var Appendable[T], idx: int, item: T) =
 
 ## Shortcut and safe way to get the ident label of a node
 proc label(node: NimNode): string = 
-  if node.kind == nnkCall or node.kind == nnkOpenSymChoice:
+  if node.kind == nnkCall or node.kind == nnkOpenSymChoice or node.kind == nnkObjConstr:
     node[0].label
   elif node.kind == nnkIdent or node.kind == nnkSym:
     $node
@@ -499,7 +499,7 @@ proc zfDelegate*(ext: ExtNimNode, caller: NimNode, delegateIndex: int) =
 ##   ...
 ## # final section
 proc zeroParse(header: NimNode, body: NimNode): NimNode =
-  if header.kind == nnkCall and body.kind == nnkStmtList:
+  if (header.kind == nnkCall or header.kind == nnkObjConstr) and body.kind == nnkStmtList:
     var funDef = header
     var hasDelegate = false
     var hasLoop = false
@@ -535,32 +535,41 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
     if not hasPre:
       paramSection.add(chk)
 
-    if funDef.kind == nnkCall:
-      for i in 1..numArgs:
-        var defaultVal: NimNode = nil
-        var symName = funDef[i].label
-        let hasDefault = funDef[i].kind == nnkExprEqExpr
-        if hasDefault:
-          defaultVal = funDef[i][1]
-          symName = funDef[i][0].label
-        let sym = newIdentNode(symName)
-        if symName != "_":
-          quotedVars[symName] = symName
-        paramSection.add quote do:
-          let `sym` =
-            if `i` < `ext`.node.len: 
-              adapt(`ext`, `i`)
+    # save type of parameters when explicitly given
+    var paramTypes = initTable[string,NimNode]()
+
+    for i in 1..numArgs:
+      var defaultVal: NimNode = nil
+      var funSym = funDef[i]
+      var paramType: NimNode = nil
+      if funSym.kind == nnkExprColonExpr:
+        funSym = funDef[i][0]
+        paramType = funDef[i][1]
+      var symName = funSym.label
+      let hasDefault = funSym.kind == nnkExprEqExpr
+      if hasDefault:
+        defaultVal = funSym[1]
+        symName = funSym[0].label
+      let sym = newIdentNode(symName)
+      if symName != "_":
+        quotedVars[symName] = symName
+        if paramType != nil:
+          paramTypes[symName] = paramType
+      paramSection.add quote do:
+        let `sym` =
+          if `i` < `ext`.node.len: 
+            adapt(`ext`, `i`)
+          else:
+            when `hasDefault`:
+              quote:
+                `defaultVal`
             else:
-              when `hasDefault`:
-                quote:
-                  `defaultVal`
-              else:
-                when `symName` != "":
-                  when `symName` == "_":
-                    zfFail("'$1' needs at least 1 parameter!" % [`funName`])
-                  else:
-                    zfFail("missing argument '$1' for '$2'" % [`symName`, `funName`])
-                newIntLitNode(0)
+              when `symName` != "":
+                when `symName` == "_":
+                  zfFail("'$1' needs at least 1 parameter!" % [`funName`])
+                else:
+                  zfFail("missing argument '$1' for '$2'" % [`symName`, `funName`])
+              newIntLitNode(0)
     
     let hasResult = body.findNode(nnkIdent, "result") != nil 
     if hasResult:
@@ -670,9 +679,31 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
           `ext`.finals.add(f)
       else:
         doAssert(false, "unsupported keyword: " & tpe)
+    
+    if paramTypes.len > 0:
+      # parameter types where explicitly given: add check to code
+      var nodeIdx = 0
+      for it in paramTypes.pairs():
+        let (symName,paramType) = it
+        let sym = nnkAccQuoted.newTree(newIdentNode(symName))
+        code.add quote do:
+          if `nodeIdx` == 0: # first check: wrap the original loop code and add the below check statements
+            `ext`.node = nnkStmtList.newTree(`ext`.node) 
+          let paramCheck = quote:
+            static:
+              # parameter type was explicitly given: check that the parameter is of the given type
+              # check is done in compile-time macro code only -
+              # but has to be done in the location where the content of the parameter is actually known: inside the loop!
+              when not (`sym` is `paramType`):
+                zfFail("Function '$1': param '$2', expected type '$3'!" % [`funName`, `symName`, $`paramType`])
+          `ext`.node.insert(`nodeIdx`, paramCheck)
+        nodeIdx += 1
     result = q
   else:
-    doAssert(false, "did not expect " & $header.kind & " or " & $body.kind)
+    if header.kind != nnkCall:
+      zfFail("did not expect " & $header.kind & " in " & header.repr)
+    if body.kind != nnkStmtList:
+      zfFail("did not expect " & $body.kind & " in body of " & header.repr)
 
 # alternative syntax still possible
 macro zero*(a: untyped): untyped = 
@@ -696,7 +727,7 @@ macro zf_inline_dbg*(header: untyped, body:untyped): untyped =
 ## calls zf_inline registering the function call and calls the actual function.
 ## This can be used to add own implementations of inline-functions with parts in Zero-DSL.
 macro zf_inline_call*(header: untyped, body: untyped): untyped =
-  doAssert(header.kind == nnkCall)
+  doAssert(header.kind == nnkCall or header.kind == nnkObjConstr)
   header[0] = newIdentNode(header.label & "__call__")
   let fun = newIdentNode("inline" & header.label.capitalizeAscii())
   let ext = newIdentNode("ext")
@@ -717,7 +748,7 @@ zf_inline indexedMap(f):
 
 ## Implementation of the 'filter' command.
 ## The trailing commands execution depend on the filter condition to be true.
-zf_inline filter(cond):
+zf_inline filter(cond: bool):
   loop:
     if cond:
       nil
@@ -748,7 +779,7 @@ zf_inline indexedFlatten():
 
 ## Implementation of the `takeWhile` command.
 ## `takeWhile(cond)` : Take all elements as long as the given condition is true.
-zf_inline takeWhile(cond):
+zf_inline takeWhile(cond: bool):
   loop:
     if not cond:
       break
@@ -757,7 +788,7 @@ zf_inline takeWhile(cond):
         
 ## Implementation of the `take` command.
 ## `take(count)` : Take `count` elements.
-zf_inline take(count):
+zf_inline take(count: int):
   init:
     var idxTake = -1
   delegate:
@@ -768,7 +799,7 @@ zf_inline take(count):
 ## Implementation of the `dropWhile` command.
 ## `dropWhile(cond)` : drop elements as long the given condition is true. 
 ## Once the condition gets false, all following elements are used.
-zf_inline dropWhile(cond):
+zf_inline dropWhile(cond: bool):
   init:
     var gate = false
   loop:
@@ -778,7 +809,7 @@ zf_inline dropWhile(cond):
 
 ## Implementation of the `drop` command.
 ## `drop(count)` : drop (or discard) the next `count` elements.
-zf_inline drop(count):
+zf_inline drop(count: int):
   init:
     var idxDrop = -1
   delegate:
@@ -804,7 +835,7 @@ proc inlineSub(ext: ExtNimNode) {.compileTime.} =
       ext.node[2] = quote:
         len(`listRef`)-`endIndexAbs` # backwards index only works with collections that have a len
     
-    zf_inline_call sub(minIndex, endIndex):
+    zf_inline_call sub(minIndex: int, endIndex: int):
       init:
         var idxSub = -1
       loop:
@@ -817,7 +848,7 @@ proc inlineSub(ext: ExtNimNode) {.compileTime.} =
 
 ## Implementation of the 'exists' command.
 ## Searches the input for a given expression. If one is found "true" is returned, else "false".
-zf_inline exists(search):
+zf_inline exists(search: bool):
   init:
     result = false
   loop:
@@ -826,7 +857,7 @@ zf_inline exists(search):
 
 ## Implementation of the 'find' command.
 ## Searches the input for a given expression. Returns an option value.
-zf_inline find(cond):
+zf_inline find(cond: bool):
   init:
     var i = 0
   loop:
@@ -838,7 +869,7 @@ zf_inline find(cond):
 
 ## Implementation of the 'all' command.
 ## Returns true of the given condition is true for all elements of the input, else false.
-zf_inline all(test):
+zf_inline all(test: bool):
   init:
     result = true
   loop:
@@ -894,7 +925,7 @@ proc inlineForeach*(ext: ExtNimNode) {.compileTime.} =
 
 ## Implementation of the 'index' command.
 ## Returns the index of the element in the input list when the given expression was found or -1 if not found.
-zf_inline index(cond):
+zf_inline index(cond: bool):
   init:
     result = -1 # index not found
   loop:

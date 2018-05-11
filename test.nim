@@ -86,7 +86,7 @@ zf_inline inc(add=1):
 ## We try to implement it not refering to filter - just to show how an if condition is handled.
 ## The resulting generated node contains a nil statement which is used by the caller to insert
 ## the next commands in the chain.
-zf_inline filterNot(condition):
+zf_inline filterNot(condition: bool):
   loop:
     if not condition:
       nil
@@ -118,13 +118,12 @@ zf_inline intersect(_):
 
   pre:
     let c = newIdentNode(zfCombinationsId)
-    let itNode = newIdentNode(zfIteratorVariableName)
     # build the it[0] == it[1] and ... chain
     var chain = quote: true
     for i in (1..<ext.node.len):
       # ... and it[0] == it[i]
       chain = quote:
-        `chain` and (`itNode`[0] == `itNode`[`i`])
+        `chain` and (it[0] == it[`i`])
 
   delegate:
     combinations(_) # all arguments of intersect are delegated to combinations
@@ -807,3 +806,10 @@ suite "valid chains":
     reject(zip(a,b) --> foreach(it[0] = it[0] + it[1]), "Adapted list cannot be changed in-place!")
     zip(a,b) --> foreach(res.add(it[0] + it[1]))
     check(res == @[5,7,9])
+
+  test "reject wrong type arguments":
+    reject(a --> exists(2) == true, "Function 'exists': param 'search', expected type 'bool'!")
+    reject(a --> exists(1) == false, "Function 'exists': param 'search', expected type 'bool'!")
+    reject(a --> index(3) == -1, "Function 'index': param 'cond', expected type 'bool'!")
+    reject(a --> all(0) == false, "Function 'all': param 'test', expected type 'bool'!")
+    reject(a --> drop(true) == @[], "Function 'drop': param 'count', expected type 'int'!")
