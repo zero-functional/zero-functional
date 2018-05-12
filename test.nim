@@ -147,6 +147,37 @@ zf_inline removeDoubles():
     filter(c.idx[0] == c.idx[1]) 
     map(c.it[0])
 
+proc inlineRemove*(ext: ExtNimNode) {.compileTime.} =
+  ## remove function that removes elements from a collection
+  ## two implementations - one for linked lists and one for indexable lists
+  ## remove elements when the given condition is true - default value is true (removes all (filtered) elements)
+  if ext.isListType():
+    zf_inline_call remove(cond=true):
+      pre:
+        let listRef = ext.listRef 
+        let itList = newIdentNode(zfListIteratorName)
+      init:
+        result = false
+      loop:
+        if cond:
+          listRef.remove(itList)
+        result = true
+  else:
+    zf_inline_call remove(cond=true):
+      pre:
+        let listRef = ext.listRef
+        ext.forceIndexLoop = true # delete is not supported when iterating over elements -> use index loop (seq modified while iterating over it)
+        static:
+          when not (listRef is FiniteIndexableLenIter):
+            zfFail("Only index with len types supported for remove")
+      init:
+        result = false
+      loop:
+        if cond:
+          result = true
+          listRef.delete(idx)
+          idx -= 1
+
 ## Registers the extensions for the user commands during compile time
 macro registerExtension(): untyped =
   # register all extensions that have been defined with the zf_inline macro
@@ -813,3 +844,16 @@ suite "valid chains":
     reject(a --> index(3) == -1, "Function 'index': param 'cond', expected type 'bool'!")
     reject(a --> all(0) == false, "Function 'all': param 'test', expected type 'bool'!")
     reject(a --> drop(true) == @[], "Function 'drop': param 'count', expected type 'int'!")
+
+  test "remove":
+    var a = @[-1,2,3,-4,5,-6]
+    var b = @[-1,2,3,-4,-5] --> to(list)
+    var c = @[-1,2,3,-4,5,-6]
+    check(a --> remove(it < 0) == true)
+    check(a == @[2,3,5])
+    check(b --> remove(it < 0) == true)
+    check(b --> to(seq) == @[2,3])
+    check(c --> filter(it < 0) --> remove() == true)
+    check(c == @[2,3,5])
+    reject(a --> remove(0) == false, "Function 'remove': param 'cond', expected type 'bool'!")
+    
