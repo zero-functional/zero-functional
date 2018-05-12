@@ -1738,7 +1738,7 @@ const debugAll = false
 ## general macro to invoke all available zero_functional functions
 macro `-->`*(a: untyped, b: untyped): untyped =
   let (a,b,debug) = checkArrow(a,b,"-->")
-  if a.kind == nnkIdent:
+  if a.label != $Command.zip:
     if not debug: # using debug (or `debug`) directly does not work (?!)
       result = quote:
         delegateArrow(type(`a`), `a`, `b`, debugAll)
@@ -1751,7 +1751,7 @@ macro `-->`*(a: untyped, b: untyped): untyped =
 ## use this macro for debugging - will output the created code
 macro `-->>`*(a: untyped, b: untyped): untyped =
   let (a,b,_) = checkArrow(a,b,"-->")
-  if a.kind == nnkIdent:
+  if a.label != $Command.zip:
     result = quote:
       delegateArrow(type(`a`), `a`, `b`, true)
   else:
