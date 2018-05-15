@@ -205,6 +205,9 @@ proc zfInit*[T, U](a: DoublyLinkedList[T], handler: proc(it: T): U): DoublyLinke
 ## Special implementation to initialize SinglyLinkedList output.
 proc zfInit*[T, U](a: SinglyLinkedList[T], handler: proc(it: T): U): SinglyLinkedList[U] =
   initSinglyLinkedList[U]()
+## Special implementation to initialize HashSet output.
+proc zfInit*[T, U](a: HashSet[T], handler: proc(it: T): U): HashSet[U] =
+  initSet[U]()
 
 ## This one could be overwritten when the own type is a template and could be mapped to different
 ## target type.
@@ -259,6 +262,11 @@ proc zfAddItem*[T](a: var Addable[T], idx: int, item: T) =
 proc zfAddItem*[T](a: var Appendable[T], idx: int, item: T) =
   discard(idx)
   a.append(item)
+
+## Add item to HashSet
+proc zfAddItem*[T](a: var HashSet[T], idx: int, item: T) =
+  discard(idx)
+  a.incl(item)
 
 ## Shortcut and safe way to get the ident label of a node
 proc label(node: NimNode): string = 
@@ -1453,6 +1461,10 @@ proc checkTo(args: NimNode, td: string): string {.compileTime.} =
       resultType = "DoublyLinkedList" & implicitTypeSuffix
     elif resultType.startswith("list["):
       resultType = "DoublyLinkedList" & resultType[4..resultType.len-1]
+    elif resultType == "set": # set as a shortcut for HashSet
+      resultType = "HashSet" & implicitTypeSuffix
+    elif resultType.startswith("set["):
+      resultType = "HashSet" & resultType[3..resultType.len-1]
     elif resultType == "seq":
       resultType = defaultResultType
   if resultType == nil:
