@@ -22,7 +22,7 @@ type
   Command* {.pure.} = enum
     ## All available commands.
     ## 'to' - is a virtual command
-    all, combinations, count, createIter, drop, dropWhile, exists, filter, find, flatten, fold, foreach, 
+    all, combinations, count, createIter, def, drop, dropWhile, exists, filter, find, flatten, fold, foreach, 
     index, indexedFlatten, indexedMap, indexedReduce, map, reduce, sub, zip, take, takeWhile, to
 
   ReduceCommand {.pure.} = enum
@@ -113,7 +113,7 @@ var zfFunctionNames {.compileTime} : seq[string] = @[]
 
 ## Adds the given function name to the internal table of supported functions.
 ## This will be done automatically when using the macros `zf_inline` or `zf_inline_call`.
-proc zfAddFunction*(functionName: string) {.compileTime.} =
+proc addFunction(functionName: string) {.compileTime.} =
   if functionName in zfFunctionNames:
     zfFail("Function $1 is already defined!" % (functionName))
   zfFunctionNames.add(functionName)
@@ -144,8 +144,6 @@ proc findNode*(node: NimNode, kind: NimNodeKind, content: string = nil) : NimNod
 ## Creates the extension function
 proc createExtensionProc(name: string, cmdSeq: seq[string]): (NimNode,NimNode) = 
   let procName = newIdentNode("zfExtend" & name)
-  # add inlineForeach manually
-  zfAddFunction($Command.foreach)
   let cseq = if cmdSeq != nil: cmdSeq else: zfFunctionNames
   let ext = newIdentNode("ext")
   let resultIdent = newIdentNode("result")
@@ -176,7 +174,9 @@ macro zfCreateExtension*(): untyped =
     zfSetExtension(`funName`)
 
 ## Create a delegate function for user-defined functions and register sequence handler functions.
-macro zfCreateExtension*(seqHandlers: static[seq[string]]): untyped =
+macro zfCreateExtension*(additionalFunctions: static[seq[string]], seqHandlers: static[seq[string]]): untyped =
+  for addFun in additionalFunctions:
+    addFunction(addFun)
   zfAddSequenceHandlers(seqHandlers)
   result = quote:
     zfCreateExtension()
@@ -521,9 +521,9 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
     if funName.endswith("__call__"):
       funNameExport = funName[0..^9] 
       if not (funNameExport in zfFunctionNames):
-        zfAddFunction(funNameExport) # only add it once
+        addFunction(funNameExport) # only add it once
     else:
-      zfAddFunction(funNameExport)
+      addFunction(funNameExport)
 
     let procName = newIdentNode("inline" & funName.capitalizeAscii())
     # parameters given to the zero function
@@ -900,14 +900,31 @@ proc findParentWithChildLabeled(node: NimNode, label: string): NimNode =
       return parent
   return nil
 
+## Implementation of the 'def' command.
+## It is possible to add own definitions - either as normal value or as a tuple.
+proc inlineDef*(ext: ExtNimNode) {.compileTime.} =
+  let v = ext.adapt()
+  ext.node = nnkLetSection.newTree()
+  if v.kind == nnkExprEqExpr and v[0].kind == nnkPar:
+    let vt = nnkVarTuple.newTree()
+    for n in v[0]:
+      vt.add(n)
+    vt.add(newEmptyNode())
+    vt.add(v[1])
+    ext.node.add(vt)
+  else:
+    ext.node.add(newIdentDefs(v[0], newEmptyNode(), v[1]))
+
 ## Implementation of the 'foreach' command.
 ## A command may be called on each element of the input list.
 ## Changing the list in-place is also supported.
 proc inlineForeach*(ext: ExtNimNode) {.compileTime.} =
+  let isEq = ext.node[1].kind == nnkExprEqExpr
+  let hasIterator = isEq and (ext.node[1][0].findNode(nnkIdent, "it") != nil)
   var adaptedExpression = ext.adapt()
   
   # special case: assignment to iterator -> try to assign to outer list (if possible)
-  if adaptedExpression.kind == nnkExprEqExpr:
+  if hasIterator:
     if ext.itIndex > 1:
       zfFail("Adapted list cannot be changed in-place!")
     # this only works if the current list has not (yet) been manipulated    
@@ -935,7 +952,9 @@ proc inlineForeach*(ext: ExtNimNode) {.compileTime.} =
         adaptedExpression = quote:
           var `tempVar` = `listRef`[`index`]
           `leftSide` = `rightSide`
-  ext.node = quote:
+  elif isEq:
+    adaptedExpression = nnkAsgn.newTree(adaptedExpression[0], adaptedExpression[1])
+  ext.node = nnkStmtList.newTree().add quote do:
     `adaptedExpression`
 
 ## Implementation of the 'index' command.
@@ -1148,6 +1167,9 @@ proc ensureFirst(ext: ExtNimNode) {.compileTime.} =
 
 macro createExtendDefaults(): untyped =
   # creates proc zfExtendDefaults   
+  # add inlineForeach + inlineDef manually
+  addFunction($Command.foreach)
+  addFunction($Command.def)
   let (funDef,_) = createExtensionProc("Defaults", nil)
   zfFunctionNames = @[]
   result = quote:
