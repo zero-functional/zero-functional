@@ -495,7 +495,7 @@ proc zfDelegate*(ext: ExtNimNode, caller: NimNode, delegateIndex: int) =
 ## - init: initialize variables used in the loop
 ## - loop: the main part that is running within the loop
 ## - delegate: delegates this function call to another function (created with zero-DSL) - possibly with changed parameters
-## - end: section added at the end of the loop
+## - endLoop: section added at the end of the loop
 ## - final: section added at the end of the function
 ##
 ## So in general it looks like this - in the overall generated code
@@ -682,7 +682,7 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
             zfDelegate(`ext`, `oldParams`, `cmdIdx`)
         code.add quote do:
           discard(`oldParams`)
-      of "end":
+      of "endLoop":
         code.add quote do:
           let e = quote:
             `cmd`
@@ -905,14 +905,19 @@ proc findParentWithChildLabeled(node: NimNode, label: string): NimNode =
 proc inlineDef*(ext: ExtNimNode) {.compileTime.} =
   let v = ext.adapt()
   ext.node = nnkLetSection.newTree()
-  if v.kind == nnkExprEqExpr and v[0].kind == nnkPar:
-    let vt = nnkVarTuple.newTree()
+  if v.kind == nnkIdent:
+    # allow shortcut for current it: def(a) <=> def(a = it)
+    ext.node.add(newIdentDefs(v, newEmptyNode(), mkItNode(ext.itIndex-1)))
+  elif v.kind == nnkExprEqExpr and v[0].kind == nnkPar:
+    # allow tuple unpacking: def((a,b) = c)
+    let vt = nnkVarTuple.newTree() 
     for n in v[0]:
-      vt.add(n)
+      vt.add(n) # add all items to the tuple on the left
     vt.add(newEmptyNode())
-    vt.add(v[1])
+    vt.add(v[1]) # add the assigned item on the right
     ext.node.add(vt)
   else:
+    # just the "normal" definition let(a = b)
     ext.node.add(newIdentDefs(v[0], newEmptyNode(), v[1]))
 
 ## Implementation of the 'foreach' command.
@@ -965,7 +970,6 @@ zf_inline index(cond: bool):
   loop:
     if cond:
       return idx
-
 
 ## Implementation of the 'fold' command.
 ## Initially the result is set to initial value given by the user, then each element is added
@@ -1029,6 +1033,9 @@ proc inlineReduce(ext: ExtNimNode) {.compileTime.} =
           let newValue = op
           if not (oldValue == newValue):
             result = (idx, newValue) # propagate new value with idx
+      endLoop:
+        if initAccu:
+          result[0] = -1 # we actually do not have a result: set index to -1
 
   else:
     zf_inline_call reduce(op):
@@ -1042,7 +1049,6 @@ proc inlineReduce(ext: ExtNimNode) {.compileTime.} =
           let prevIt = it
           let `nextIt` = (result, prevIt)
           result = op
-
 
 ## Implementation of the 'combinations' command.
 ## Each two distinct elements of the input list are combined to one element.

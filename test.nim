@@ -719,6 +719,7 @@ suite "valid chains":
     check(arr --> sum() == 41)
     check(arr --> filter(it < 10) --> max() == 9)
     check(arr --> filter(it < 7) --> indexedMax() == (0,3))
+    check(arr --> filter(it < -1) --> indexedMax() == (-1,0))
     # sumIdx does not make much sense - here the index of the last added element 8 is 5, the sum is 28 
     check(arr --> filter(it > 7) --> indexedSum() == (5,28))
     check(arr --> filter(it > 7) --> product() == 792)
