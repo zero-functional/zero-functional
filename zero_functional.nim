@@ -758,6 +758,8 @@ macro zf_inline_call*(header: untyped, body: untyped): untyped =
 proc inlineMap*(ext: ExtNimNode) {.compileTime.} =
   let kind = ext.node[1].kind 
   if kind == nnkExprEqExpr or kind == nnkAsgn:
+    let label = ext.node[1][1].label
+    let isInternal = label == internalIteratorName or label == zfIndexVariableName
     let v = ext.adapt()
     ext.node = nnkLetSection.newTree()
     if v[0].kind == nnkPar:
@@ -771,6 +773,13 @@ proc inlineMap*(ext: ExtNimNode) {.compileTime.} =
     else:
       # just the "normal" definition (a = b)
       ext.node.add(newIdentDefs(v[0], newEmptyNode(), v[1]))
+    if not isInternal: # leave out definitions that access it or idx directly
+      # set next iterator
+      let nextIt = ext.nextItNode()
+      let f = v[1]
+      ext.node = nnkStmtList.newTree(ext.node).add quote do:
+        let `nextIt` = `f`
+        discard(`nextIt`) # iterator might not be used 
   else:
     zf_inline_call map(f):
       loop:
