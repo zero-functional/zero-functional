@@ -22,7 +22,7 @@ type
   Command* {.pure.} = enum
     ## All available commands.
     ## 'to' - is a virtual command
-    all, combinations, count, createIter, def, drop, dropWhile, exists, filter, find, flatten, fold, foreach, 
+    all, combinations, count, createIter, drop, dropWhile, exists, filter, find, flatten, fold, foreach, 
     index, indexedFlatten, indexedMap, indexedReduce, map, reduce, sub, zip, take, takeWhile, to
 
   ReduceCommand {.pure.} = enum
@@ -87,7 +87,7 @@ type
 
 static: 
   ## Contains all functions that may result in a sequence result. Elements are added automatically to SEQUENCE_HANDLERS
-  var SEQUENCE_HANDLERS = [$Command.combinations, $Command.sub].toSet()
+  var SEQUENCE_HANDLERS = [$Command.map, $Command.combinations, $Command.sub].toSet()
 
 ## Can be read in test implementation
 var lastFailure {.compileTime.} : string = "" 
@@ -751,11 +751,30 @@ macro zf_inline_call*(header: untyped, body: untyped): untyped =
     `q`
     `fun`(`ext`)
 
+
 ## Implementation of the 'map' command.
 ## Each element of the input is mapped to a given function.
-zf_inline map(f):
-  loop:
-    let it = f
+## It is also possible to add own definitions - either as normal value or as a tuple.
+proc inlineMap*(ext: ExtNimNode) {.compileTime.} =
+  let kind = ext.node[1].kind 
+  if kind == nnkExprEqExpr or kind == nnkAsgn:
+    let v = ext.adapt()
+    ext.node = nnkLetSection.newTree()
+    if v[0].kind == nnkPar:
+      # allow tuple unpacking: ((a,b) = c)
+      let vt = nnkVarTuple.newTree() 
+      for n in v[0]:
+        vt.add(n) # add all items to the tuple on the left
+      vt.add(newEmptyNode())
+      vt.add(v[1]) # add the assigned item on the right
+      ext.node.add(vt)
+    else:
+      # just the "normal" definition (a = b)
+      ext.node.add(newIdentDefs(v[0], newEmptyNode(), v[1]))
+  else:
+    zf_inline_call map(f):
+      loop:
+        let it = f
 
 zf_inline indexedMap(f):
   loop:
@@ -899,26 +918,6 @@ proc findParentWithChildLabeled(node: NimNode, label: string): NimNode =
     if parent != nil:
       return parent
   return nil
-
-## Implementation of the 'def' command.
-## It is possible to add own definitions - either as normal value or as a tuple.
-proc inlineDef*(ext: ExtNimNode) {.compileTime.} =
-  let v = ext.adapt()
-  ext.node = nnkLetSection.newTree()
-  if v.kind == nnkIdent:
-    # allow shortcut for current it: def(a) <=> def(a = it)
-    ext.node.add(newIdentDefs(v, newEmptyNode(), mkItNode(ext.itIndex-1)))
-  elif v.kind == nnkExprEqExpr and v[0].kind == nnkPar:
-    # allow tuple unpacking: def((a,b) = c)
-    let vt = nnkVarTuple.newTree() 
-    for n in v[0]:
-      vt.add(n) # add all items to the tuple on the left
-    vt.add(newEmptyNode())
-    vt.add(v[1]) # add the assigned item on the right
-    ext.node.add(vt)
-  else:
-    # just the "normal" definition let(a = b)
-    ext.node.add(newIdentDefs(v[0], newEmptyNode(), v[1]))
 
 ## Implementation of the 'foreach' command.
 ## A command may be called on each element of the input list.
@@ -1175,7 +1174,6 @@ macro createExtendDefaults(): untyped =
   # creates proc zfExtendDefaults   
   # add inlineForeach + inlineDef manually
   addFunction($Command.foreach)
-  addFunction($Command.def)
   let (funDef,_) = createExtensionProc("Defaults", nil)
   zfFunctionNames = @[]
   result = quote:

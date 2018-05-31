@@ -858,3 +858,6 @@ suite "valid chains":
     check(c == @[2,3,5])
     reject(a --> remove(0) == false, "Function 'remove': param 'cond', expected type 'bool'!")
     
+  test "define variables in map":
+    check(a --> map(item = it) --> filter(item > 0) == @[2,8])
+    check(a --> indexedMap(it) --> map((index,item) = it) --> filter(item > 0) --> map(index) == @[0,1])
