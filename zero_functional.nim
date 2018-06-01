@@ -181,6 +181,41 @@ macro zfCreateExtension*(additionalFunctions: static[seq[string]], seqHandlers: 
   result = quote:
     zfCreateExtension()
 
+## Determines the closest possible type info of the input parameter to "-->".
+## Sometimes the getType (node) works best, sometimes getTypeInst (nodeInst).
+proc getTypeInfo(node: NimNode, nodeInst: NimNode): string =
+  var typeinfo = node
+  if typeinfo.len > 0:
+    if node.kind == nnkEnumTy:
+      result = "enum"
+    elif ($typeinfo[0] == "ref"):
+      result = $typeinfo[1]
+      let idx = result.find(":")
+      if idx != -1:
+        result = result[0..idx-1]
+    else:
+      let res = repr(nodeInst)
+      if res == nil:
+        result = repr(node)
+      else:
+        result = res
+  else:
+    let n1 = node.repr
+    let n2 = nodeInst.repr
+    if n2 == nil or n1.len > n2.len:
+      result = n1
+    else:
+      result = n2
+
+## Create a tuple return type
+## `var x: (int,int)` and `var x: mkTuple(int,2)` are equivalent.
+macro mkTuple(td: typedesc, num: static[int]): untyped = 
+  var node = nnkPar.newTree()
+  for _ in 1..num:
+    node.add(newIdentNode(getTypeInfo(td.getType[1], td.getTypeInst[1])))
+  result = quote:
+    `node`
+
 ## Converts the id-string to the given enum type.
 proc toEnum*[T:typedesc[enum]](key: string; t:T): auto =
   result = none(t)
@@ -198,6 +233,42 @@ proc toReduceCommand(key: string): Option[ReduceCommand] =
 ## Special implementation to initialize array output.
 proc zfInit*[A, T, U](s: array[A,T], handler: proc(it: T): U): array[A, U] =
   discard
+
+## Special implementations for tuple code (max 5 items)
+proc zfInit*[T, U](s: (T,T), handler: proc(it: T): U): (U,U) =
+  discard    
+proc zfInit*[T, U](s: (T,T,T), handler: proc(it: T): U): (U,U,U) =
+  discard    
+proc zfInit*[T, U](s: (T,T,T,T), handler: proc(it: T): U): (U,U,U,U) =
+  discard    
+proc zfInit*[T, U](s: (T,T,T,T,T), handler: proc(it: T): U): (U,U,U,U,U) =
+  discard    
+proc zfAddItem*[T](a: var (T,T), idx: int, item: T) =
+  case idx:
+  of 0: a[0] = item
+  of 1: a[1] = item
+  else: assert(false)
+proc zfAddItem*[T](a: var (T,T,T), idx: int, item: T) =
+  case idx:
+  of 0: a[0] = item
+  of 1: a[1] = item
+  of 2: a[2] = item
+  else: assert(false)
+proc zfAddItem*[T](a: var (T,T,T,T), idx: int, item: T) =
+  case idx:
+  of 0: a[0] = item
+  of 1: a[1] = item
+  of 2: a[2] = item
+  of 3: a[3] = item
+  else: assert(false)
+proc zfAddItem*[T](a: var (T,T,T,T,T), idx: int, item: T) =
+  case idx:
+  of 0: a[0] = item
+  of 1: a[1] = item
+  of 2: a[2] = item
+  of 3: a[3] = item
+  of 4: a[4] = item
+  else: assert(false)
     
 ## Special implementation to initialize DoublyLinkedList output.
 proc zfInit*[T, U](a: DoublyLinkedList[T], handler: proc(it: T): U): DoublyLinkedList[U] =
@@ -208,18 +279,22 @@ proc zfInit*[T, U](a: SinglyLinkedList[T], handler: proc(it: T): U): SinglyLinke
 ## Special implementation to initialize HashSet output.
 proc zfInit*[T, U](a: HashSet[T], handler: proc(it: T): U): HashSet[U] =
   initSet[U]()
+proc zfInit*[T, U](a: seq[T], handler: proc(it: T): U): seq[U] =
+  @[]
 
-## This one could be overwritten when the own type is a template and could be mapped to different
-## target type.
+## Fallback implementation that converts each iterable type to the default seq type.
 ## Default is seq output type.
-proc zfInit*[T, U](a: Iterable[T], handler: proc(it: T): U): seq[U] =
+proc zfInitSeq*[T, U](a: Iterable[T], handler: proc(it: T): U): seq[U] =
   @[]
     
 ## General zfInit for iterable types.
 ## This should be overwritten for user defined types because otherwise the default = seq[T] on will be created.
 proc zfInit*[T](a: Iterable[T]): Iterable[T] =
   proc zfIdent[T](it: T): T = it
-  zfInit(a, zfIdent)
+  when compiles(zfInit(a, zfIdent)):
+    zfInit(a, zfIdent)
+  else:
+    zfInitSeq(a, zfIdent)
 
 proc createCombination*[A,T](it: array[A,T], idx: array[A,int]): Combination[A,T] =
   result = Combination[A,T](it: it, idx: idx)
@@ -1435,6 +1510,14 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool, resultType: str
       code = quote:
         var res: `resDef`
         `resultIdent` = zfInit(res)
+    elif collType.startswith("(") and collType.endswith(")"): # tuple
+        let num = collType.split(",").len()
+        if num > 5:
+          zfFail("Tuple return types are only supported up to 5 elements")   
+        ext.needsIndex = true
+        code = quote:
+          var res: mkTuple(iteratorType(`itDef`), `num`)
+          `resultIdent` = zfInit(res)
     elif forceSeq and hasIter:
       code = quote:
         var res: seq[iteratorType(`itDef`)]
@@ -1686,31 +1769,6 @@ proc iterHandler(args: NimNode, debug: bool, td: string): NimNode {.compileTime.
     # for the whole tree do (but this could crash):
     # echo(treeRepr(result))
   
-## Determines the closest possible type info of the input parameter to "-->".
-## Sometimes the getType (node) works best, sometimes getTypeInst (nodeInst).
-proc getTypeInfo(node: NimNode, nodeInst: NimNode): string =
-  var typeinfo = node
-  if typeinfo.len > 0:
-    if node.kind == nnkEnumTy:
-      result = "enum"
-    elif ($typeinfo[0] == "ref"):
-      result = $typeinfo[1]
-      let idx = result.find(":")
-      if idx != -1:
-        result = result[0..idx-1]
-    else:
-      let res = repr(nodeInst)
-      if res == nil:
-        result = repr(node)
-      else:
-        result = res
-  else:
-    let n1 = node.repr
-    let n2 = nodeInst.repr
-    if n2 == nil or n1.len > n2.len:
-      result = n1
-    else:
-      result = n2
 
 macro connectCall(td: typedesc, args: varargs[untyped]): untyped = 
   result = iterHandler(args, false, getTypeInfo(td.getType[1], td.getTypeInst[1]))

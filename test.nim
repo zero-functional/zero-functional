@@ -861,3 +861,9 @@ suite "valid chains":
   test "define variables in map":
     check(a --> map(item = it) --> filter(item > 0) == @[2,8])
     check(a --> indexedMap(it) --> map((index,item) = it) --> filter(item > 0) --> map(index) == @[0,1])
+  
+  test "tuple conversion":
+    let t = (1,2,3)
+    check(t --> map(float(it)) == (1.0,2.0,3.0))
+    let (x,y) = (1,2) --> map(float(it))
+    check(x == 1.0 and y == 2.0)
