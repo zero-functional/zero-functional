@@ -285,6 +285,11 @@ proc zfAddItem*[T](a: var SinglyLinkedList[T], idx: int, item: T) =
   discard(idx)
   a.prepend(item)
 
+## Special implementation for ``DoublyLinkedList`` (needed for JS backend)
+proc zfAddItem*[T](a: var DoublyLinkedList[T], idx: int, item: T) =
+  discard(idx)
+  a.append(item)
+
 ## Add item to type where an "add" proc is defined for
 proc zfAddItem*[T](a: var Addable[T], idx: int, item: T) =
   discard(idx)
