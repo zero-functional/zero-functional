@@ -208,15 +208,6 @@ proc getTypeInfo(node: NimNode, nodeInst: NimNode): string =
     else:
       result = n2
 
-## Create a tuple return type
-## `var x: (int,int)` and `var x: mkTuple(int,2)` are equivalent.
-macro mkTuple(td: typedesc, num: static[int]): untyped = 
-  var node = nnkPar.newTree()
-  for _ in 1..num:
-    node.add(newIdentNode(getTypeInfo(td.getType[1], td.getTypeInst[1])))
-  result = quote:
-    `node`
-
 ## Converts the id-string to the given enum type.
 proc toEnum*[T:typedesc[enum]](key: string; t:T): auto =
   result = none(t)
@@ -236,42 +227,6 @@ proc toReduceCommand(key: string): Option[ReduceCommand] =
 proc zfInit*[A, T, U](s: array[A,T], handler: proc(it: T): U): array[A, U] =
   discard
 
-## Special implementations for tuple code (max 5 items)
-proc zfInit*[T, U](s: (T,T), handler: proc(it: T): U): (U,U) =
-  discard    
-proc zfInit*[T, U](s: (T,T,T), handler: proc(it: T): U): (U,U,U) =
-  discard    
-proc zfInit*[T, U](s: (T,T,T,T), handler: proc(it: T): U): (U,U,U,U) =
-  discard    
-proc zfInit*[T, U](s: (T,T,T,T,T), handler: proc(it: T): U): (U,U,U,U,U) =
-  discard    
-proc zfAddItem*[T](a: var (T,T), idx: int, item: T) =
-  case idx:
-  of 0: a[0] = item
-  of 1: a[1] = item
-  else: assert(false)
-proc zfAddItem*[T](a: var (T,T,T), idx: int, item: T) =
-  case idx:
-  of 0: a[0] = item
-  of 1: a[1] = item
-  of 2: a[2] = item
-  else: assert(false)
-proc zfAddItem*[T](a: var (T,T,T,T), idx: int, item: T) =
-  case idx:
-  of 0: a[0] = item
-  of 1: a[1] = item
-  of 2: a[2] = item
-  of 3: a[3] = item
-  else: assert(false)
-proc zfAddItem*[T](a: var (T,T,T,T,T), idx: int, item: T) =
-  case idx:
-  of 0: a[0] = item
-  of 1: a[1] = item
-  of 2: a[2] = item
-  of 3: a[3] = item
-  of 4: a[4] = item
-  else: assert(false)
-    
 ## Special implementation to initialize DoublyLinkedList output.
 proc zfInit*[T, U](a: DoublyLinkedList[T], handler: proc(it: T): U): DoublyLinkedList[U] =
   initDoublyLinkedList[U]()
@@ -344,6 +299,34 @@ proc zfAddItem*[T](a: var Appendable[T], idx: int, item: T) =
 proc zfAddItem*[T](a: var HashSet[T], idx: int, item: T) =
   discard(idx)
   a.incl(item)
+
+## Special implementations for tuple code (max 5 items)
+proc zfAddItem*[T](a: var (T,T), idx: int, item: T) =
+  case idx:
+  of 0: a[0] = item
+  of 1: a[1] = item
+  else: assert(false)
+proc zfAddItem*[T](a: var (T,T,T), idx: int, item: T) =
+  case idx:
+  of 0: a[0] = item
+  of 1: a[1] = item
+  of 2: a[2] = item
+  else: assert(false)
+proc zfAddItem*[T](a: var (T,T,T,T), idx: int, item: T) =
+  case idx:
+  of 0: a[0] = item
+  of 1: a[1] = item
+  of 2: a[2] = item
+  of 3: a[3] = item
+  else: assert(false)
+proc zfAddItem*[T](a: var (T,T,T,T,T), idx: int, item: T) =
+  case idx:
+  of 0: a[0] = item
+  of 1: a[1] = item
+  of 2: a[2] = item
+  of 3: a[3] = item
+  of 4: a[4] = item
+  else: assert(false)
 
 {.pop.}
 
@@ -1530,7 +1513,8 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool, resultType: str
       listRef = listRef.findNode(nnkPar)[0][0]
     
     let i = collType.find("[")
-    if i != -1 and hasIter and (not forceSeq or resultType != nil):
+    let isTuple = collType.startswith("(") and collType.endswith(")")
+    if not isTuple and (i != -1 and hasIter and (not forceSeq or resultType != nil)):
       collType = collType[0..i-1]
       let collSym = parseExpr(collType)
       let resDef =
@@ -1543,14 +1527,20 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool, resultType: str
       code = quote:
         var res: `resDef`
         `resultIdent` = zfInit(res)
-    elif collType.startswith("(") and collType.endswith(")"): # tuple
-        let num = collType.split(",").len()
-        if num > 5:
-          zfFail("Tuple return types are only supported up to 5 elements")   
-        ext.needsIndex = true
-        code = quote:
-          var res: mkTuple(iteratorType(`itDef`), `num`)
-          `resultIdent` = zfInit(res)
+
+    elif isTuple:
+      let num = collType.split(",").len()
+      ext.needsIndex = true
+      if num < 2 or num > 5:
+        zfFail("Tuple return types are only supported from 2 up to 5 elements")
+      let x = genSym(nskVar, "x")   
+      let init = nnkAsgn.newTree(`resultIdent`, nnkPar.newTree())
+      for _ in 1..num:
+        init[1].add(x)
+      code = quote:
+        var `x`: iteratorType(`itDef`)
+        `init`
+
     elif forceSeq and hasIter:
       code = quote:
         var res: seq[iteratorType(`itDef`)]
