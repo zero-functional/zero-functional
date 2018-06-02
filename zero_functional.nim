@@ -14,6 +14,9 @@ const internalAccuName = if (useInternalAccu): "__" & zfAccuVariableName & "__" 
 const implicitTypeSuffix = "?" # used when result type is automatically determined
 const defaultResultType = "seq[int]" & implicitTypeSuffix
 
+# if set to true: turns on prints code generated with zf (for macros -->, zfun and connect)
+const debugAll = false
+
 # See bug https://github.com/nim-lang/Nim/issues/7787
 const hasIteratorBug = true
 
@@ -1642,7 +1645,8 @@ proc checkTo(args: NimNode, td: string): string {.compileTime.} =
   result = resultType
 
 ## Main function that creates the outer function call.
-proc iterHandler(args: NimNode, debug: bool, td: string): NimNode {.compileTime.} =
+proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compileTime.} =
+  let debug = debugInfo.len() > 0
   let orig = if debug: args.copyNimTree() else: nil
   let resultType = args.checkTo(td) 
   let preInit = args.replaceZip() # zip is replaced with map + filter
@@ -1794,23 +1798,42 @@ proc iterHandler(args: NimNode, debug: bool, td: string): NimNode {.compileTime.
     result = q
     code = q.getStmtList().add(init)
   
-  if (debug):
-    var comment = "# "
-    for i in 0..orig.len()-1:
-      if i > 0:
-        comment &= " --> "
-      comment &= orig[i].repr
-    echo(comment)
+  if debug:
+    echo ""
+    echo debugInfo
+    echo "# " & orig[0].repr & ".zfun:"
+    var i = 1
+    var fun = ""
+    while i < orig.len():
+      fun = orig[i].label
+      if fun != "" and i < orig.len() - 2 and fun == orig[i+1].label:
+        echo "#   " & orig[i].label & ":"
+        while fun == orig[i].label:
+          echo "#     " & orig[i][1].repr
+          i += 1
+      else:
+        echo "#   " & orig[i].repr
+        i += 1
+
     echo(repr(result).replace("__", ""))
     # for the whole tree do (but this could crash):
     # echo(treeRepr(result))
   
+proc dbgLineInfo(a: NimNode, debug: bool): string =
+  if debug or debugAll:
+    let l = a.lineInfoObj
+    var idx = l.filename.rfind('\\')
+    if idx == -1:
+      idx = l.filename.rfind('/')
+    result = "# $1:$2" % [$l.filename[idx+1..^1], $l.line]
+  else:
+    result = ""
 
-macro connectCall(td: typedesc, args: varargs[untyped]): untyped = 
-  result = iterHandler(args, false, getTypeInfo(td.getType[1], td.getTypeInst[1]))
+macro connectCall(td: typedesc, callInfo: untyped, args: varargs[untyped]): untyped =
+  result = iterHandler(args, getTypeInfo(td.getType[1], td.getTypeInst[1]), callInfo.repr[1..^2])
 
 ## Preparse the call to the iterFunction.
-proc delegateMacro(a: NimNode, b1:NimNode, debug: bool, td: string): NimNode =
+proc delegateMacro(a: NimNode, b1:NimNode, td: string, debugInfo: string): NimNode =
   var b = b1
 
   # we expect b to be a call, but if we have another node - e.g. infix or bracketexpr - then
@@ -1847,14 +1870,14 @@ proc delegateMacro(a: NimNode, b1:NimNode, debug: bool, td: string): NimNode =
       break
   for it in m:
     args.add(it)
-  result = iterHandler(args, debug, td)
+  result = iterHandler(args, td, debugInfo)
 
   if path != nil: # insert the result back into the original tree
     result = outer.apply(path, result)
 
 ## delegate call to get the type information.
-macro delegateArrow(td: typedesc, a: untyped, b: untyped, debug: static[bool]): untyped =
-  result = delegateMacro(a, b, debug, getTypeInfo(td.getType[1], td.getTypeInst[1]))
+macro delegateArrow(td: typedesc, a: untyped, b: untyped, debugInfo: untyped): untyped =
+  result = delegateMacro(a, b, getTypeInfo(td.getType[1], td.getTypeInst[1]), debugInfo.repr[1..^2])
   
 ## The arrow "-->" should not be part of the left-side argument a.
 proc checkArrow(a: NimNode, b: NimNode, arrow: string): (NimNode, NimNode, bool) =
@@ -1875,8 +1898,6 @@ macro connect*(args: varargs[untyped]): untyped =
   result = quote:
     connectCall(type(`args`[0]), `args`)
   
-const debugAll = false
-
 macro zfunCall(td: typedesc, debug: static[bool], a: untyped, b: untyped): untyped = 
   let b2 = nnkStmtList.newTree(a)
   for c in b:
@@ -1885,7 +1906,7 @@ macro zfunCall(td: typedesc, debug: static[bool], a: untyped, b: untyped): untyp
         b2.add(newCall(c[0], callParam))
     else:
       b2.add(c)
-  result = iterHandler(b2, debug or debugAll, getTypeInfo(td.getType[1], td.getTypeInst[1]))
+  result = iterHandler(b2, getTypeInfo(td.getType[1], td.getTypeInst[1]), b.dbgLineInfo(debug or debugAll))
 
 macro zfun*(a: untyped, b: untyped): untyped =
   result = quote:
@@ -1897,22 +1918,24 @@ macro zfunDbg*(a: untyped, b: untyped): untyped =
 
 ## general macro to invoke all available zero_functional functions
 macro `-->`*(a: untyped, b: untyped): untyped =
-  let (a,b,debug) = checkArrow(a,b,"-->")
+  let (a,b2,debug) = checkArrow(a,b,"-->")
+  let l = b.dbgLineInfo(debug or debugAll)
   if a.label != $Command.zip:
     if not debug: # using debug (or `debug`) directly does not work (?!)
       result = quote:
-        delegateArrow(type(`a`), `a`, `b`, debugAll)
+        delegateArrow(type(`a`), `a`, `b2`, `l`)
     else:
       result = quote:
-        delegateArrow(type(`a`), `a`, `b`, true)
+        delegateArrow(type(`a`), `a`, `b2`, `l`)
   else:
-    result = delegateMacro(a, b, debug or debugAll, "seq")
+    result = delegateMacro(a, b2, "seq", l)
 
 ## use this macro for debugging - will output the created code
 macro `-->>`*(a: untyped, b: untyped): untyped =
-  let (a,b,_) = checkArrow(a,b,"-->")
+  let (a,b2,_) = checkArrow(a,b,"-->")
+  let l = b2.dbgLineInfo(true)
   if a.label != $Command.zip:
     result = quote:
-      delegateArrow(type(`a`), `a`, `b`, true)
+      delegateArrow(type(`a`), `a`, `b2`, `l`)
   else:
-    result = delegateMacro(a, b, true, "seq")
+    result = delegateMacro(a, b2, "seq", l)
