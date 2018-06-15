@@ -863,7 +863,7 @@ proc inlineMap*(ext: ExtNimNode) {.compileTime.} =
     if not isInternal: # leave out definitions that access it or idx directly
       # set next iterator
       let nextIt = ext.nextItNode()
-      let f = v[1]
+      let f = v[0] # set 'it' to the previously assigned value / 'it' might also be consequently used
       ext.node = nnkStmtList.newTree(ext.node).add quote do:
         let `nextIt` = `f`
         discard(`nextIt`) # iterator might not be used 
@@ -1792,7 +1792,7 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
   else:
     # there is no extra function, but at least we have an own section here - preventing double definitions
     var q = quote:
-      if true:
+      block:
         `preInit`
         nil
     result = q
