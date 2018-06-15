@@ -867,3 +867,20 @@ suite "valid chains":
     check(t --> map(float(it)) == (1.0,2.0,3.0))
     let (x,y) = (1,2) --> map(float(it))
     check(x == 1.0 and y == 2.0)
+
+  test "assignment in map":
+    var cnt = 0
+    proc countFun(i: int): int =
+      cnt += 1
+      result = i
+    
+    let res = a.zfun:
+      map:
+        row = countFun(it)
+      filter:
+        row > 0
+      all:
+         row mod 2 == 0
+		 
+    check(res)
+    check(cnt == a.len)
