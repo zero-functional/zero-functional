@@ -4,14 +4,22 @@ const zfIteratorVariableName* = "it"
 const zfAccuVariableName* = "a"
 const zfCombinationsId* = "c"
 const zfIndexVariableName* = "idx"
+const zfListIteratorName* = "__itlist__"
+const zfMinHighVariableName* = "__minHigh__"
+const zfInternalIteratorName* = "__autoIter__"
 
 const internalIteratorName = "__" & zfIteratorVariableName & "__"
 const useInternalAccu = zfAccuVariableName != "result"
 const internalAccuName = if (useInternalAccu): "__" & zfAccuVariableName & "__" else: "result"
 const implicitTypeSuffix = "?" # used when result type is automatically determined
 const defaultResultType = "seq[int]" & implicitTypeSuffix
-const listIteratorName = "__itlist__"
-const minHighVariableName = "__minHigh__"
+
+# if set to true: turns on prints code generated with zf (for macros -->, zfun and connect)
+const debugAll = false
+
+# See bug https://github.com/nim-lang/Nim/issues/7787
+const hasIteratorBug = true
+const createProc = hasIteratorBug
 
 type 
 
@@ -27,7 +35,7 @@ type
 
   ExtNimNode* = ref object ## Store additional info the current NimNode used in the inline... functions
     node*: NimNode     ## the current working node / the current function
-    commands: HashSet[Command] ## set of all used command
+    nodeIndex: int     ## the position in args of the current working node
     prevItIndex*: int  ## index used for the previous iterator 
     itIndex*: int      ## index used for the created iterator - 0 for the first. Will be incremented automatically. 
     isLastItem: bool   ## true if the current item is the last item in the command chain
@@ -43,48 +51,48 @@ type
     isIter: bool       ## true if an iterator shall be created
     adapted: int       ## internally used to check that all iterators were created before the adapt call (otherwise adapt refers to an old iterator)
     elemAdded: bool    ## set when `addElem` has been called. Needed for generating collection output.
+    forceIndexLoop: bool ## set when a loop with index rather than with iterator is needed (i.e. the loop changes the iterated collection)
+    delegateUntil: int ## last argument index that is part of a "delegate" chain
 
   ## used for "combinations" command as output
   Combination*[A,T] = object
-    it: array[A,T]
-    idx: array[A,int]
+    it*: array[A,T]
+    idx*: array[A,int]
 
 type
-  FiniteIndexable[T] = concept a
+  FiniteIndexable*[T] = concept a
     a.low() is int
     a.high() is int
     a[int]
 
-  FiniteIndexableLen[T] = concept a
+  FiniteIndexableLen*[T] = concept a
     a.len() is int
     a[int]
 
-  FiniteIndexableLenIter[T] = concept a
+  FiniteIndexableLenIter*[T] = concept a
     a.len() is int
     a[int] is T 
     for it in a:
       type(it) is T
 
-  Iterable[T] = concept a
+  Iterable*[T] = concept a
     for it in a:
       type(it) is T
   
-  Appendable[T] = concept a, var b
+  Appendable*[T] = concept a, var b
     for it in a:
       type(it) is T
     b.append(T)
 
-  Addable[T] = concept a, var b
+  Addable*[T] = concept a, var b
     for it in a:
       type(it) is T
     b.add(T)
   
 
-static: # need to use var to be able to concat
-  let FORCE_SEQ_HANDLERS = [$Command.indexedMap, $Command.flatten, $Command.indexedFlatten, $Command.zip].toSet
-  let CANNOT_BE_ALTERED_HANDLERS = [Command.map, Command.indexedMap, Command.combinations, Command.flatten, Command.zip].toSet
-  var SEQUENCE_HANDLERS = [$Command.combinations, $Command.sub].toSet()
-  SEQUENCE_HANDLERS.incl(FORCE_SEQ_HANDLERS)
+static: 
+  ## Contains all functions that may result in a sequence result. Elements are added automatically to SEQUENCE_HANDLERS
+  var SEQUENCE_HANDLERS = [$Command.map, $Command.combinations, $Command.sub].toSet()
 
 ## Can be read in test implementation
 var lastFailure {.compileTime.} : string = "" 
@@ -96,8 +104,8 @@ proc zfGetLastFailure*() : string {.compileTime.} =
 ## Called when some failure is detected during macro processing. 
 proc zfFail*(msg: string) {.compileTime.} =
   lastFailure = msg
-  assert(false, ": " & msg)
-    
+  error(msg)
+
 ## This is the default extension complaining when a given function was not found.
 proc extendDefault(ext: ExtNimNode) : ExtNimNode {.compileTime.} =
   zfFail("$1 is unknown, you could provide your own implementation! See `zfCreateExtension`!" % ext.node[0].repr)
@@ -107,6 +115,13 @@ proc extendDefault(ext: ExtNimNode) : ExtNimNode {.compileTime.} =
 ## See `test.nim` for an example of how to do that.
 var zfExtension {.compileTime.} : proc(ext: ExtNimNode): ExtNimNode = extendDefault
 var zfFunctionNames {.compileTime} : seq[string] = @[]
+
+## Adds the given function name to the internal table of supported functions.
+## This will be done automatically when using the macros `zf_inline` or `zf_inline_call`.
+proc addFunction(functionName: string) {.compileTime.} =
+  if functionName in zfFunctionNames:
+    zfFail("Function $1 is already defined!" % (functionName))
+  zfFunctionNames.add(functionName)
 
 ## Set the extension method.
 ## The extension method will be automatically created and registered using `zfRegister` or `zfRegisterExt`
@@ -156,18 +171,46 @@ proc createExtensionProc(name: string, cmdSeq: seq[string]): (NimNode,NimNode) =
   caseStmt.add(ofElse.findNode(nnkElse))
   result = (procDef, procName)
 
-## Create a delegate function for the given enum.
-## For each member `m` of that enum, the function `inlineM` has to be created.
+## Create a delegate function for user-defined functions.
 macro zfCreateExtension*(): untyped =
   let (funDef,funName) = createExtensionProc("UserExt", nil)
   result = quote:
     `funDef`
     zfSetExtension(`funName`)
 
-macro zfCreateExtension*(seqHandlers: static[seq[string]]): untyped =
+## Create a delegate function for user-defined functions and register sequence handler functions.
+macro zfCreateExtension*(additionalFunctions: static[seq[string]], seqHandlers: static[seq[string]]): untyped =
+  for addFun in additionalFunctions:
+    addFunction(addFun)
   zfAddSequenceHandlers(seqHandlers)
   result = quote:
     zfCreateExtension()
+
+## Determines the closest possible type info of the input parameter to "-->".
+## Sometimes the getType (node) works best, sometimes getTypeInst (nodeInst).
+proc getTypeInfo(node: NimNode, nodeInst: NimNode): string =
+  var typeinfo = node
+  if typeinfo.len > 0:
+    if node.kind == nnkEnumTy:
+      result = "enum"
+    elif ($typeinfo[0] == "ref"):
+      result = $typeinfo[1]
+      let idx = result.find(":")
+      if idx != -1:
+        result = result[0..idx-1]
+    else:
+      let res = repr(nodeInst)
+      if res == nil:
+        result = repr(node)
+      else:
+        result = res
+  else:
+    let n1 = node.repr
+    let n2 = nodeInst.repr
+    if n2 == nil or n1.len > n2.len:
+      result = n1
+    else:
+      result = n2
 
 ## Converts the id-string to the given enum type.
 proc toEnum*[T:typedesc[enum]](key: string; t:T): auto =
@@ -177,38 +220,42 @@ proc toEnum*[T:typedesc[enum]](key: string; t:T): auto =
       result = some(it)
       break
 
-## Converts the id-string to its Command counterpart.
-proc toCommand(key: string): Option[Command] =
-  key.toEnum(Command)
-
 ## Converts the id-string to its ReduceCommand counterpart.
 proc toReduceCommand(key: string): Option[ReduceCommand] =
   if key.startswith("indexed"): 
     return key[7..key.len-1].toLowerAscii().toReduceCommand()
   result = key.toEnum(ReduceCommand)
 
+{.push inline.}
 ## Special implementation to initialize array output.
 proc zfInit*[A, T, U](s: array[A,T], handler: proc(it: T): U): array[A, U] =
   discard
-    
+
 ## Special implementation to initialize DoublyLinkedList output.
 proc zfInit*[T, U](a: DoublyLinkedList[T], handler: proc(it: T): U): DoublyLinkedList[U] =
   initDoublyLinkedList[U]()
 ## Special implementation to initialize SinglyLinkedList output.
 proc zfInit*[T, U](a: SinglyLinkedList[T], handler: proc(it: T): U): SinglyLinkedList[U] =
   initSinglyLinkedList[U]()
+## Special implementation to initialize HashSet output.
+proc zfInit*[T, U](a: HashSet[T], handler: proc(it: T): U): HashSet[U] =
+  initSet[U]()
+proc zfInit*[T, U](a: seq[T], handler: proc(it: T): U): seq[U] =
+  @[]
 
-## This one could be overwritten when the own type is a template and could be mapped to different
-## target type.
+## Fallback implementation that converts each iterable type to the default seq type.
 ## Default is seq output type.
-proc zfInit*[T, U](a: Iterable[T], handler: proc(it: T): U): seq[U] =
+proc zfInitSeq*[T, U](a: Iterable[T], handler: proc(it: T): U): seq[U] =
   @[]
     
 ## General zfInit for iterable types.
 ## This should be overwritten for user defined types because otherwise the default = seq[T] on will be created.
 proc zfInit*[T](a: Iterable[T]): Iterable[T] =
   proc zfIdent[T](it: T): T = it
-  zfInit(a, zfIdent)
+  when compiles(zfInit(a, zfIdent)):
+    zfInit(a, zfIdent)
+  else:
+    zfInitSeq(a, zfIdent)
 
 proc createCombination*[A,T](it: array[A,T], idx: array[A,int]): Combination[A,T] =
   result = Combination[A,T](it: it, idx: idx)
@@ -242,6 +289,11 @@ proc zfAddItem*[T](a: var SinglyLinkedList[T], idx: int, item: T) =
   discard(idx)
   a.prepend(item)
 
+## Special implementation for ``DoublyLinkedList`` (needed for JS backend)
+proc zfAddItem*[T](a: var DoublyLinkedList[T], idx: int, item: T) =
+  discard(idx)
+  a.append(item)
+
 ## Add item to type where an "add" proc is defined for
 proc zfAddItem*[T](a: var Addable[T], idx: int, item: T) =
   discard(idx)
@@ -252,13 +304,44 @@ proc zfAddItem*[T](a: var Appendable[T], idx: int, item: T) =
   discard(idx)
   a.append(item)
 
-## Helper function to determine the type of the iterated item
-proc iterType[T](items: Iterable[T]): T = 
-  discard
+## Add item to HashSet
+proc zfAddItem*[T](a: var HashSet[T], idx: int, item: T) =
+  discard(idx)
+  a.incl(item)
+
+## Special implementations for tuple code (max 5 items)
+proc zfAddItem*[T](a: var (T,T), idx: int, item: T) =
+  case idx:
+  of 0: a[0] = item
+  of 1: a[1] = item
+  else: assert(false)
+proc zfAddItem*[T](a: var (T,T,T), idx: int, item: T) =
+  case idx:
+  of 0: a[0] = item
+  of 1: a[1] = item
+  of 2: a[2] = item
+  else: assert(false)
+proc zfAddItem*[T](a: var (T,T,T,T), idx: int, item: T) =
+  case idx:
+  of 0: a[0] = item
+  of 1: a[1] = item
+  of 2: a[2] = item
+  of 3: a[3] = item
+  else: assert(false)
+proc zfAddItem*[T](a: var (T,T,T,T,T), idx: int, item: T) =
+  case idx:
+  of 0: a[0] = item
+  of 1: a[1] = item
+  of 2: a[2] = item
+  of 3: a[3] = item
+  of 4: a[4] = item
+  else: assert(false)
+
+{.pop.}
 
 ## Shortcut and safe way to get the ident label of a node
 proc label(node: NimNode): string = 
-  if node.kind == nnkCall:
+  if node.kind == nnkCall or node.kind == nnkOpenSymChoice or node.kind == nnkObjConstr:
     node[0].label
   elif node.kind == nnkIdent or node.kind == nnkSym:
     $node
@@ -268,32 +351,6 @@ proc label(node: NimNode): string =
 ## Get the label of the current command.
 proc label*(ext: ExtNimNode): string =
   ext.node.label
-
-## Adds the given commands to the current command chain replacing the current element.
-## Returns a sequence of `NimNode` containing the empty parameters that probably will have to be filled using
-## the `add` function.
-proc replaceChainBy*(ext: ExtNimNode, commands: varargs[string]) : seq[NimNode] =
-  result = @[]
-  var argIdx = -1
-  let label = ext.label
-  var found = false
-  if not (label in SEQUENCE_HANDLERS)  and commands[^1] in SEQUENCE_HANDLERS:
-    zfFail("Command '$1' has to be registered as sequence handler as it is replaced by '$2' as last command - use 'zfCreateExtension'!" % [label, commands[^1]])
- 
-  for arg in ext.args:
-    argIdx += 1
-    if arg.kind == nnkCall and arg[0].label == label:
-      found = true
-      ext.args[argIdx][0] = newIdentNode("") # replace with dummy node
-      ext.isLastItem = false
-      break
-  if not found:
-    zfFail("label '$1' not found!" % label)
-  for idx in argIdx..<argIdx + commands.len:
-    let cmd = commands[idx-argIdx]
-    let node = newCall(cmd)
-    ext.args.insert(idx+1, node)
-    result.add(node)
 
 ## Replace the given identifier by the string expression
 proc replace(node: NimNode, searchNode: NimNode, replNode: NimNode): NimNode =
@@ -345,190 +402,12 @@ proc getStmtList*(node: NimNode, removeNil = true): NimNode =
       return child
   return nil
     
-## Gets the result type, depending on the input-result type and the type-description of the input type.
-## When the result type was given explicitly by the user that type is used.
-## Otherwise the template argument is determined by the input type.
-proc getResType(resultType: string, td: string): (NimNode, bool) {.compileTime.} =
-  if resultType == nil:
-    return (nil, false)
-  var resType = resultType
-  let explicitType = not resultType.endswith(implicitTypeSuffix)
-  if not explicitType:
-    resType = resType[0..resType.len-1-implicitTypeSuffix.len]
-
-  let idx = resType.find("[")
-  if idx != -1:
-    result = (parseExpr(resType), explicitType)
-  else:
-    let res = newIdentNode(resType)
-    let idx2 = td.find("[")
-    var q : NimNode 
-    if idx2 != -1:
-      var tdarg = td[idx2+1..td.len-2]
-      let idxComma = tdarg.find(", ")
-      let idxBracket = tdarg.find("[")
-      if idxComma != -1 and (idxBracket == -1 or idxBracket > idxComma) and resType != "array":
-        # e.g. array[0..2,...] -> seq[...]
-        tdarg = tdarg[idxComma+2..tdarg.len-1]
-      q = parseExpr(resType & "[" & tdarg & "]")
-    else:
-      q = quote:
-        `res`[int] # this is actually a dummy type
-    result = (q, false)
-
-## Creates the function that returns the final result of all combined commands.
-## The result type depends on map, zip or flatten calls. It may be set by the user explicitly using to(...)
-proc createAutoProc(args: NimNode, isSeq: bool, resultType: string, td: string): NimNode =
-  var (resType, explicitType) = getResType(resultType, td)
-  let resultIdent = newIdentNode("result")
-  var autoProc: NimNode = nil
-  let isIter = args.last.kind == nnkCall and args.last[0].label == $Command.createIter 
-  if isIter:
-    let iterName = newIdentNode(args.last[1].label)
-    args.del(args.len-1)
-    if not (args.last[0].label in SEQUENCE_HANDLERS):
-      zfFail("'iter' can only be used with list results - last arg is '" & args.last[0].label & "'")
-    autoProc = quote:
-      iterator `iterName`(): auto = 
-        nil
-  else:
-    autoProc = quote:
-      (proc(): auto =
-        nil)
-  var code: NimNode = nil
-
-  # set a default result in case the resType is not nil - this result will be used
-  # if there is no explicit map, zip or flatten operation called
-  if resType != nil:
-    code = quote:
-      var res: `resType` 
-      `resultIdent` = zfInit(res)
-
-  # check explicitType: type was given explicitly (inclusive all template arguments) by user,
-  # then we use resType directly:
-  if explicitType:
-    discard # use default result above
-  elif not isIter and isSeq:
-    # now we try to determine the result type of the operation automatically...
-    # this is a bit tricky as the operations zip, map and flatten may / will alter the result type.
-    # hence we try to apply the map-operation to the iterator, etc. to get the resulting iterator (and list) type.
-    var listRef = args[0]
-    if listRef.kind == nnkCall and listRef[0].label == $Command.zip:
-      listRef = listRef.findNode(nnkPar)[0][0]
-    let itIdent = newIdentNode(zfIteratorVariableName) # the original "it" used in the closure of "map" command
-    let idxIdent = newIdentNode(zfIndexVariableName)
-    var handlerIdx = 0
-    var handler : NimNode = nil
-    let comboNode = newIdentNode(zfCombinationsId)
-    # the "handler" is the default mapping ``it`` to ``it`` (if "map" is not used)
-    var handlerInit : NimNode = nil
-
-    var hasCombination = false
-    for arg in args:
-      if arg.len > 0:
-        let label = arg[0].repr
-        let isIndexed = label == $Command.indexedMap
-        let isFlatten = label == $Command.flatten 
-        let isIndexedFlatten = label == $Command.indexedFlatten
-        if label == $Command.combinations: 
-          hasCombination = true
-        elif label == $Command.map or label == $Command.zip or isIndexed or isFlatten or isIndexedFlatten: # zip is part of map and will not be checked
-          var params : NimNode = 
-            if isFlatten or isIndexedFlatten:
-              nnkStmtList.newTree().add(newIdentNode(zfIteratorVariableName))
-            else:
-              arg[1].copyNimTree() # params of the map command
-          # use / overwrite the last mapping to get the final result type
-          let prevHandler = "handler" & $handlerIdx 
-          handlerIdx += 1
-          handler = newIdentNode("handler" & $handlerIdx)
-          if handlerInit == nil:
-            handlerInit = nnkStmtList.newTree()
-          else:
-            # call previous handler for each iterator instance
-            params = params.replace(itIdent, parseExpr(prevHandler & "(" & zfIteratorVariableName & ")"))
-          let handlerCall = quote:
-            proc `handler`(`itIdent`: auto): auto =
-              nil
-          var q : NimNode = nil 
-          if isFlatten:
-            q = quote:
-              for it in `params`:
-                return it
-          elif isIndexedFlatten:
-            q = quote:
-              for it in `params`:
-                return (0,it)
-          else:
-            var createCombo = nnkStmtList.newTree()
-            if hasCombination:
-              createCombo = quote:
-                var `comboNode` = createCombination([0,0],[0,0]) # could be used as map param
-                discard `comboNode`
-            var createResult =
-              if isIndexed:
-                quote:
-                  `resultIdent` = (0,`params`)
-              else:
-                quote:
-                  `resultIdent` = `params`
-            q = quote:
-              var `idxIdent` = 0  # could be used as map param
-              `createCombo`
-              `createResult`
-              discard `idxIdent`
-          handlerCall.getStmtList().add(q)
-          handlerInit.add(handlerCall)
-      
-    if handlerInit != nil:
-      # we have a handler(-chain): use it to map the result type
-      if resultType == nil:
-        code = quote:
-          `handlerInit`
-          `resultIdent` = zfInit(`listRef`,`handler`)
-      else:
-        let resTypeOk = resType.repr.startswith(resultType)
-        if resultType == "seq" or resultType == defaultResultType:
-          # this works with seq but unfortunately not (yet) with DoublyLinkedList
-          code = quote:
-            `handlerInit`
-            var res: seq[iterType(`listRef`).type]
-            `resultIdent` = zfInit(res, `handler`)
-        elif (resultType == "list" or resultType == "DoublyLinkedList") and not resTypeOk:
-          zfFail("unable to determine the output type automatically - please use list[<outputType>].") 
-        elif resultType == "array" and not resTypeOk:
-          zfFail("unable to determine the output type automatically - array needs size and type parameters.")
-        else:
-          code = quote:
-            `handlerInit`
-            var res: `resType`
-            when compiles(zfInit(res,`handler`)):
-              `resultIdent` = zfInit(res,`handler`)
-            else:
-              static:
-                zfFail("unable to determine the output type automatically.")
-    elif resultType == nil: # no handlerInit used
-      # result type was not given and map/zip/flatten not used: 
-      # use the same type as in the original list
-      code = quote:
-        `resultIdent` = zfInit(`listRef`)
-  # no sequence output:
-  # we do _not_ need to initialize the resulting list type here
-  else:
-    code = nil
-
-  let stmtInit = autoProc.getStmtList()
-  if code != nil:
-    stmtInit.add(code)
-  stmtInit.add(newNilLit())
-  result = autoProc
-  
 proc mkItNode*(index: int) : NimNode {.compileTime.} = 
   newIdentNode(internalIteratorName & ("$1" % $index))
 
 proc nextItNode*(ext: ExtNimNode) : NimNode {.compileTime.} =
   if ext.adapted != -1 and ext.adapted != ext.prevItIndex:
-    zfFail("ext has already been adapted! Call (all) nextItNode _before_ calling adapt or use adaptPrev for the previous iterator!")
+    zfFail("ext has already been adapted! Call (all) nextItNode _before_ calling adapt!")
   result = mkItNode(ext.itIndex)
   ext.itIndex += 1
 
@@ -570,26 +449,12 @@ proc adapt*(ext: ExtNimNode, index=1, inFold=false): NimNode {.compileTime.} =
     zfFail("ext has already been adapted with a different index!")
     result = ext.node[index]
 
-## Shortcut for `node.adapt()` using the previous iterator variable.
-## Variable names like `it` or `idx` are replaced by their internal (unique) presentations.
-proc adaptPrev*(ext: ExtNimNode, index=1, inFold=false): NimNode {.compileTime.} =
-  if ext.adapted == -1:
-    ext.adapted = ext.prevItIndex
-    result = ext.node[index].adapt(ext.prevItIndex, inFold)
-  else:
-    if not (ext.adapted == ext.prevItIndex):
-      zfFail("ext has already been adapted with a different index!")
-    result = ext.node[index]
-
-## Gets the parameters for the current function and replaces `it` references by internal variable names.
-proc getParams*(ext: ExtNimNode) : seq[NimNode] =
-  result = @[]
-  for idx in 1..<ext.node.len:
-    result.add(ext.node[idx].adapt(ext.prevItIndex))
+proc isListType(td: string): bool = 
+  td.startswith("DoublyLinkedList") or td.startswith("SinglyLinkedList")
 
 ## Returns true if the input collection type is a `DoublyLinkedList` or a `SinglyLinkedList`.
 proc isListType*(ext: ExtNimNode): bool = 
-  ext.typeDescription.startswith("DoublyLinkedList") or ext.typeDescription.startswith("SinglyLinkedList")
+  ext.typeDescription.isListType()
 
 ## Helper function that creates a list output if map, filter or flatten is the last command
 ## in the chain and a list is generated as output.
@@ -598,27 +463,31 @@ proc addElem*(ext: ExtNimNode, addItem: NimNode): NimNode {.compileTime.} =
     zfFail("addElem has already been called!")
   ext.elemAdded = true 
   if ext.isLastItem:
-    if ext.isIter:
-      result = quote:
-        yield `addItem`
-    else:
-      let resultIdent = ext.res
-      # use -1 to force an error in case the index was actually needed instead of silently doing the wrong thing
-      let idxIdent = if ext.needsIndex: newIdentNode(zfIndexVariableName) else: newIntLitNode(-1)
-      let resultType = ext.resultType
-      let typedescr = ext.typeDescription
-      
-      result = quote:
-        when compiles(zfAddItem(`resultIdent`, `idxIdent`, `addItem`)):
-          zfAddItem(`resultIdent`, `idxIdent`, `addItem`)
-        else:
-          static:
-            when (`resultType` == nil or `resultType` == ""):
-              zfFail("Need either 'add' or 'append' implemented in '" & `typedescr` & "' to add elements")
-            else:
-              zfFail("Result type '" & `resultType` & "' and added item of type '" & $`addItem`.type & "' do not match!")
+    result = quote:
+      yield `addItem`
   else:
     result = nil
+
+macro zfAddItemChk*(resultIdent: untyped, idxIdent: untyped, addItem: untyped, typedescr: static[string], resultType: static[string]): untyped =
+  result = quote:
+    when compiles(zfAddItem(`resultIdent`, `idxIdent`, `addItem`)):
+      zfAddItem(`resultIdent`, `idxIdent`, `addItem`)
+    else:
+      static:
+        when (`resultType` == nil or `resultType` == ""):
+          zfFail("Need either 'add' or 'append' implemented in '" & `typedescr` & "' to add elements")
+        else:
+          zfFail("Result type '" & `resultType` & "' and added item of type '" & $`addItem`.type & "' do not match!")
+
+proc addElemResult(ext: ExtNimNode, addItem: NimNode): NimNode {.compileTime.} =
+  let resultIdent = ext.res
+  # use -1 to force an error in case the index was actually needed instead of silently doing the wrong thing
+  let idxIdent = if ext.needsIndex: newIdentNode(zfIndexVariableName) else: newIntLitNode(-1)
+  let resultType = ext.resultType
+  let typedescr = ext.typeDescription
+  
+  result = quote:
+    zfAddItemChk(`resultIdent`, `idxIdent`, `addItem`, `typedescr`, `resultType`)
 
 ## Helper for Zero-DSL: quote all used variables that are defined somewhere in the created function.
 proc addQuotes(a: NimNode, quotedVars: Table[string,string]) =
@@ -629,6 +498,8 @@ proc addQuotes(a: NimNode, quotedVars: Table[string,string]) =
         a[i] = nnkAccQuoted.newTree(newIdentNode(quotedVars[child.label]))
       else:
         child.addQuotes(quotedVars)
+      if a.kind == nnkDotExpr:
+        break # only quote left side of dot expressions
 
 ## Helper for Zero-DSL: replace all 'it' nodes by the next iterator (in let expressions when defining a new iterator)
 ## or by previous iterator. 
@@ -650,7 +521,7 @@ proc replaceIt(a: NimNode, repl: NimNode, left: bool) : bool =
       if left:
         return true # only once per left node
       result = true
-    
+
     if a.kind == nnkDotExpr:
       break # only replace left side of dot
 
@@ -660,28 +531,46 @@ proc replaceVarDefs(a: NimNode, quotedVars: var Table[string,string], preSection
   let isPre = preSection or (a.kind == nnkCall and a[0].label == "pre")
   for b in a:
     if (a.kind == nnkVarSection or a.kind == nnkLetSection) and b.kind == nnkIdentDefs:
-      if b[0].kind == nnkIdent: # Correct? Or: sym also??
-        let label = b[0].label
-        if label != "idx" and label != "it":
-          if not isPre and not (label in quotedVars):
-            let labelNode = newIdentNode(label)
-            if (b[1].kind == nnkIdent): # symbol name was explicitly given
-              let s = b[1]
-              let q = quote:
-                let `labelNode`= `s`
-              b[1] = newEmptyNode()
-              result.add(q)
-            else:
-              # generate symbol
-              let nsk = if a.kind == nnkVarSection: nskVar else: nskLet
-              let q = quote:
-                let `labelNode` = genSym(NimSymKind(`nsk`), `label`)
-              result.add(q)
-          quotedVars[label] = label
+      let label = b[0].label
+      if label != "" and label != "idx" and label != "it":
+        if not isPre and not (label in quotedVars):
+          let labelNode = newIdentNode(label)
+          if (b[1].kind == nnkIdent): # symbol name was explicitly given
+            let s = b[1]
+            result.add quote do:
+              let `labelNode`= `s`
+            b[1] = newEmptyNode()
+          else:
+            # generate symbol
+            let nsk = if a.kind == nnkVarSection: nskVar else: nskLet
+            result.add quote do:
+              let `labelNode` = genSym(NimSymKind(`nsk`), `label`)
+        quotedVars[label] = label
     else:
       let c = b.replaceVarDefs(quotedVars, isPre)
       if c.len > 0:
         result.add(c)
+
+## Called when delegate section is used in Zero-DSL
+proc zfDelegate*(ext: ExtNimNode, caller: NimNode, delegateIndex: int) =
+  let newNode = ext.node.copyNimTree()
+  if newNode.len == 2 and newNode[1].label == "_":
+    # copy default arguments from original function call when (_) is used as call
+    newNode.del(1)
+    for i in 1..<caller.len:
+      newNode.add(caller[i])
+  ext.delegateUntil = ext.nodeIndex + delegateIndex + 1
+  ext.args.insert(ext.delegateUntil, newNode)
+  ext.node = nnkStmtList.newTree()
+
+macro zfParamChk(funNameExport: untyped, sym: untyped, symName: untyped, paramType: typedesc) : untyped = 
+# parameter type was explicitly given: check that the parameter is of the given type
+# check is done in compile-time macro code only -
+# but has to be done in the location where the content of the parameter is actually known: inside the loop!
+  result = quote:
+    static:
+      when not ((`sym`) is `paramType`):
+        zfFail("Function '$1': param '$2', expected type '$3'!" % [`funNameExport`, `symName`, $`paramType`])
 
 ## Parse the given Zero-DSL and create an inlineXyz function.
 ## E.g. `zf_inline index(): ...` will create `proc inlineIndex(ext: ExtNimNode)`.
@@ -692,7 +581,7 @@ proc replaceVarDefs(a: NimNode, quotedVars: var Table[string,string], preSection
 ## - init: initialize variables used in the loop
 ## - loop: the main part that is running within the loop
 ## - delegate: delegates this function call to another function (created with zero-DSL) - possibly with changed parameters
-## - end: section added at the end of the loop
+## - endLoop: section added at the end of the loop
 ## - final: section added at the end of the function
 ##
 ## So in general it looks like this - in the overall generated code
@@ -708,16 +597,19 @@ proc replaceVarDefs(a: NimNode, quotedVars: var Table[string,string], preSection
 ##   ...
 ## # final section
 proc zeroParse(header: NimNode, body: NimNode): NimNode =
-  if header.kind == nnkCall and body.kind == nnkStmtList:
+  if (header.kind == nnkCall or header.kind == nnkObjConstr) and body.kind == nnkStmtList:
     var funDef = header
+    var hasDelegate = false
+    var hasLoop = false
     let funName = funDef.label
+    var funNameExport = funName
     # when this function has been called with zf_inline_call the "__call__" has to be stripped for the actual zero function name
     if funName.endswith("__call__"):
-      let n = funName[0..^9]
-      if not (n in zfFunctionNames):
-        zfFunctionNames.add(n)
+      funNameExport = funName[0..^9] 
+      if not (funNameExport in zfFunctionNames):
+        addFunction(funNameExport) # only add it once
     else:
-      zfFunctionNames.add(funName)
+      addFunction(funNameExport)
 
     let procName = newIdentNode("inline" & funName.capitalizeAscii())
     # parameters given to the zero function
@@ -742,72 +634,78 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
     if not hasPre:
       paramSection.add(chk)
 
-    if funDef.kind == nnkCall:
-      for i in 1..numArgs:
-        var defaultVal: NimNode = nil
-        var symName = funDef[i].label
-        let hasDefault = funDef[i].kind == nnkExprEqExpr
-        if hasDefault:
-          defaultVal = funDef[i][1]
-          symName = funDef[i][0].label
-        let sym = newIdentNode(symName)
+    # save type of parameters when explicitly given
+    var paramTypes = initTable[string,NimNode]()
+
+    for i in 1..numArgs:
+      var defaultVal: NimNode = nil
+      var funSym = funDef[i]
+      var paramType: NimNode = nil
+      if funSym.kind == nnkExprColonExpr:
+        funSym = funDef[i][0]
+        paramType = funDef[i][1]
+      var symName = funSym.label
+      let hasDefault = funSym.kind == nnkExprEqExpr
+      if hasDefault:
+        defaultVal = funSym[1]
+        symName = funSym[0].label
+        paramType = quote:
+          type(`defaultVal`)
+      let sym = newIdentNode(symName)
+      if symName != "_":
         quotedVars[symName] = symName
-        let q = quote:
-          let `sym` =
-            if `i` < `ext`.node.len: 
-              adapt(`ext`, `i`)
+        if paramType != nil:
+          paramTypes[symName] = paramType
+      paramSection.add quote do:
+        let `sym` =
+          if `i` < `ext`.node.len: 
+            adapt(`ext`, `i`)
+          else:
+            when `hasDefault`:
+              quote:
+                `defaultVal`
             else:
-              when `hasDefault`:
-                quote:
-                  `defaultVal`
-              else:
-                when `symName` != "":
-                  when `symName` == "_":
-                    zfFail("'$1' needs at least 1 parameter!" % [`funName`])
-                  else:
-                    zfFail("missing argument '$1' for '$2'" % [`symName`, `funName`])
-                newIntLitNode(0)
-        paramSection.add(q)        
+              when `symName` != "":
+                when `symName` == "_":
+                  zfFail("'$1' needs at least 1 parameter!" % [`funNameExport`])
+                else:
+                  zfFail("missing argument '$1' for '$2'" % [`symName`, `funNameExport`])
+              newIntLitNode(0)
     
     let hasResult = body.findNode(nnkIdent, "result") != nil 
     if hasResult:
       let res = newIdentNode("resultIdent")
-      let q = quote:
+      letSection.add quote do:
         let `res` = newIdentNode("result")
-      letSection.add(q)
       quotedVars["result"] = "resultIdent"
     if hasResult or body.findNode(nnkReturnStmt) != nil:
-      let q = quote:
+      letSection.add quote do:
         if not `ext`.isLastItem:
-          zfFail("'$1' has a result and must be last item in chain!" % `funName`)
-      letSection.add(q)
+          zfFail("'$1' has a result and must be last item in chain!" % `funNameExport`)
     else:
       # register iterator as sequence handler
       zfAddSequenceHandlers(funName)
       
     if body.findNode(nnkIdent, zfIndexVariableName) != nil:
       let idxIdent = newIdentNode("idxIdent")
-      let q = quote:
+      letSection.add quote do:
         let `idxIdent` = newIdentNode(`zfIndexVariableName`)
         discard(`idxIdent`)
         `ext`.needsIndex = true
-      letSection.add(q)
       quotedVars[zfIndexVariableName] = "idxIdent"
-    
-    # replace it in 'it = ...' with `nextIt` and create the next iterator
-    if body.replaceIt(nnkAccQuoted.newTree(newIdentNode("nextIdent")), true):
-      let nextIt = newIdentNode("nextIdent")
-      let q = quote:
-        let `nextIt` = `ext`.nextItNode()
-      letSection.add(q)
-    
-    # access the previous iterator replacing 'it'
-    if body.replaceIt(nnkAccQuoted.newTree(newIdentNode("prevIdent")), false):
-      let prev = newIdentNode("prevIdent")
-      let q = quote:
-        let `prev` = `ext`.prevItNode()
-      letSection.add(q)
-    
+
+    if (not hasPre and body[0].label != "delegate") or body.len != 2 or body[1].label != "delegate": 
+      # replace it in 'it = ...' with `nextIt` and create the next iterator
+      if body.replaceIt(nnkAccQuoted.newTree(newIdentNode("nextIdent")), true):
+        let nextIt = newIdentNode("nextIdent")
+        letSection.add quote do:
+          let `nextIt` = `ext`.nextItNode()
+      # access the previous iterator replacing 'it'
+      if body.replaceIt(nnkAccQuoted.newTree(newIdentNode("prevIdent")), false):
+        let prev = newIdentNode("prevIdent")
+        letSection.add quote do:
+          let `prev` = `ext`.prevItNode()
+
     # create the proc
     let q = quote:
       proc `procName`( `ext`: ExtNimnode) {.compileTime.} =
@@ -817,7 +715,12 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
 
     let code = q.getStmtList()
 
-    var firstDelegate = true
+    # save old state for later checks
+    let delegateUntil = newIdentNode("delegateUntil")
+    if paramTypes.len > 0:
+      code.add quote do:
+        let `delegateUntil` = `ext`.delegateUntil
+
     # generate the code sections
     for i in 0..<body.len:
       let tpe = body[i].label
@@ -829,49 +732,81 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
         # all variables defined in the body have to be uniquely referenced 
         # - independent from the code section they are located in
         body.addQuotes(quotedVars)
-      let qCmd = 
-        case tpe:
-        of "pre":
-          quote:
+
+      case tpe:
+      of "pre":
+        code.add quote do:
+          `cmd`
+      of "init":
+        doAssert(not hasDelegate, "delegate cannot be used together with init or loop")
+        code.add quote do:
+          let i = quote:
             `cmd`
-        of "init":
-          quote:
-            let i = quote:
-              `cmd`
-            `ext`.initials.add(i)
-        of "loop":
-          quote:
-            `ext`.node = quote:
-              `cmd`
-        of "delegate":
-          assert(firstDelegate, "only one delegate supported")
-          firstDelegate = false
-          let label = cmd[0][0].label
-          let inlineCmd = newIdentNode("inline" & label.capitalizeAscii())     
+          `ext`.initials.add(i)
+      of "loop":
+        hasLoop = true
+        doAssert(not hasDelegate, "delegate cannot be used together with init or loop")
+        code.add quote do:
+          `ext`.node = quote:
+            `cmd`
+      of "delegate":
+        hasDelegate = true
+        doAssert(not hasLoop, "delegate cannot be used together with loop")
+        let oldParams = newIdentNode("oldParams")
+        let isLast = newIdentNode("isLast")
+        let isLastCmd = newIdentNode("isLastCmd")
+        code.add quote do:
+          let `isLast` = `ext`.isLastItem
+          var `isLastCmd` = false
+          let `oldParams` = `ext`.node
+        for cmdIdx in 0..<cmd.len:
+          let label = cmd[cmdIdx][0].label
           let p = newCall(label)
-          for i in 1..<cmd[0].len:
-            p.add(cmd[0][i])
-          quote:
+          for i in 1..<cmd[cmdIdx].len:
+            p.add(cmd[cmdIdx][i])
+          if cmdIdx == cmd.len-1:
+            code.add quote do:
+              `isLastCmd` = true
+          code.add quote do:
             `ext`.node = quote:
               `p`
-            `inlineCmd`(`ext`)
-        of "end":
-          quote:
-            let e = quote:
-              `cmd`
-            `ext`.endLoop.add(e)
-        of "final":
-          quote:
-            let f = quote:
-              `cmd`
-            `ext`.finals.add(f)
-        else:
-          assert(false, "unsupported keyword: " & tpe)
-          nil
-      code.add(qCmd)
+            `ext`.isLastItem = `isLast` and `isLastCmd`
+            zfDelegate(`ext`, `oldParams`, `cmdIdx`)
+        code.add quote do:
+          discard(`oldParams`)
+      of "endLoop":
+        code.add quote do:
+          let e = quote:
+            `cmd`
+          `ext`.endLoop.add(e)
+      of "final":
+        code.add quote do:
+          let f = quote:
+            `cmd`
+          `ext`.finals.add(f)
+      else:
+        doAssert(false, "unsupported keyword: " & tpe)
+    
+    if paramTypes.len > 0:
+      # parameter types where explicitly given: add check to code
+      var nodeIdx = 0
+      for it in paramTypes.pairs():
+        let (symName,paramType) = it
+        let sym = nnkAccQuoted.newTree(newIdentNode(symName))
+        code.add quote do:
+          if `nodeIdx` == 0: # first check: wrap the original loop code and add the below check statements
+            `ext`.node = nnkStmtList.newTree(`ext`.node)
+          if `ext`.nodeIndex > `delegateUntil`: 
+            let paramCheck = quote:
+              zfParamChk(`funNameExport`, `sym`, `symName`, `paramType`)
+            `ext`.node.insert(`nodeIdx`, paramCheck)
+        nodeIdx += 1
     result = q
   else:
-    assert(false, "did not expect " & $header.kind & " or " & $body.kind)
+    if header.kind != nnkCall:
+      zfFail("did not expect " & $header.kind & " in " & header.repr)
+    if body.kind != nnkStmtList:
+      zfFail("did not expect " & $body.kind & " in body of " & header.repr)
 
 # alternative syntax still possible
 macro zero*(a: untyped): untyped = 
@@ -880,19 +815,22 @@ macro zero*(a: untyped): untyped =
     body.add(a[i])
   result = zeroParse(a[0], body)
 
-macro zfInline*(header: untyped, body:untyped): untyped =
+## Initate the Zero-DSL definition of an inline function.
+## The macro expects the function name, its parameters (in brackets) and the body to implement in different sections.
+## See zeroParse.
+macro zf_inline*(header: untyped, body: untyped): untyped =
   result = zeroParse(header, body)
-macro zfInlineInner*(header: untyped, body: untyped): untyped =
-  result = zeroParse(header, body)
-macro zfInlineDbg*(header: untyped, body:untyped): untyped =
+
+## Helper that prints the created inline function.
+## Useful when Zero-DSL cannot be used for the whole implementation of an inline function.
+macro zf_inline_dbg*(header: untyped, body:untyped): untyped =
   result = zeroParse(header, body)
   echo(result.repr)
-macro zfIteratorDbg*(header: untyped, body:untyped): untyped =
-  #echo(body.treeRepr)
-  result = zeroParse(header, body)
-  echo(result.repr)
-macro zfInlineCall(header: untyped, body: untyped): untyped =
-  assert(header.kind == nnkCall)
+
+## calls zf_inline registering the function call and calls the actual function.
+## This can be used to add own implementations of inline-functions with parts in Zero-DSL.
+macro zf_inline_call*(header: untyped, body: untyped): untyped =
+  doAssert(header.kind == nnkCall or header.kind == nnkObjConstr)
   header[0] = newIdentNode(header.label & "__call__")
   let fun = newIdentNode("inline" & header.label.capitalizeAscii())
   let ext = newIdentNode("ext")
@@ -901,11 +839,39 @@ macro zfInlineCall(header: untyped, body: untyped): untyped =
     `q`
     `fun`(`ext`)
 
+
 ## Implementation of the 'map' command.
 ## Each element of the input is mapped to a given function.
-zf_inline map(f):
-  loop:
-    let it = f
+## It is also possible to add own definitions - either as normal value or as a tuple.
+proc inlineMap*(ext: ExtNimNode) {.compileTime.} =
+  let kind = ext.node[1].kind 
+  if kind == nnkExprEqExpr or kind == nnkAsgn:
+    let label = ext.node[1][1].label
+    let isInternal = label == internalIteratorName or label == zfIndexVariableName
+    let v = ext.adapt()
+    ext.node = nnkLetSection.newTree()
+    if v[0].kind == nnkPar:
+      # allow tuple unpacking: ((a,b) = c)
+      let vt = nnkVarTuple.newTree() 
+      for n in v[0]:
+        vt.add(n) # add all items to the tuple on the left
+      vt.add(newEmptyNode())
+      vt.add(v[1]) # add the assigned item on the right
+      ext.node.add(vt)
+    else:
+      # just the "normal" definition (a = b)
+      ext.node.add(newIdentDefs(v[0], newEmptyNode(), v[1]))
+    if not isInternal: # leave out definitions that access it or idx directly
+      # set next iterator
+      let nextIt = ext.nextItNode()
+      let f = v[0] # set 'it' to the previously assigned value / 'it' might also be consequently used
+      ext.node = nnkStmtList.newTree(ext.node).add quote do:
+        let `nextIt` = `f`
+        discard(`nextIt`) # iterator might not be used 
+  else:
+    zf_inline_call map(f):
+      loop:
+        let it = f
 
 zf_inline indexedMap(f):
   loop:
@@ -913,7 +879,7 @@ zf_inline indexedMap(f):
 
 ## Implementation of the 'filter' command.
 ## The trailing commands execution depend on the filter condition to be true.
-zf_inline filter(cond):
+zf_inline filter(cond: bool):
   loop:
     if cond:
       nil
@@ -942,10 +908,9 @@ zf_inline indexedFlatten():
       let idx = idxFlatten
       discard(idx)
 
-
 ## Implementation of the `takeWhile` command.
 ## `takeWhile(cond)` : Take all elements as long as the given condition is true.
-zf_inline takeWhile(cond):
+zf_inline takeWhile(cond: bool):
   loop:
     if not cond:
       break
@@ -954,7 +919,7 @@ zf_inline takeWhile(cond):
         
 ## Implementation of the `take` command.
 ## `take(count)` : Take `count` elements.
-zf_inline take(count):
+zf_inline take(count: int):
   init:
     var idxTake = -1
   delegate:
@@ -965,7 +930,7 @@ zf_inline take(count):
 ## Implementation of the `dropWhile` command.
 ## `dropWhile(cond)` : drop elements as long the given condition is true. 
 ## Once the condition gets false, all following elements are used.
-zf_inline dropWhile(cond):
+zf_inline dropWhile(cond: bool):
   init:
     var gate = false
   loop:
@@ -975,7 +940,7 @@ zf_inline dropWhile(cond):
 
 ## Implementation of the `drop` command.
 ## `drop(count)` : drop (or discard) the next `count` elements.
-zf_inline drop(count):
+zf_inline drop(count: int):
   init:
     var idxDrop = -1
   delegate:
@@ -988,7 +953,6 @@ zf_inline drop(count):
 ## e.g. `a --> sub(0,1)` would contain the first 2 elements of a.
 ## In sub also Backward indices (e.g. ^1) can be used.
 proc inlineSub(ext: ExtNimNode) {.compileTime.} =
-  # sub is re-routed as filter implementation
   let minIndex = ext.node[1]
   if ext.node.len == 2:
     # only one parameter: same as drop
@@ -1002,7 +966,7 @@ proc inlineSub(ext: ExtNimNode) {.compileTime.} =
       ext.node[2] = quote:
         len(`listRef`)-`endIndexAbs` # backwards index only works with collections that have a len
     
-    zf_inline_call sub(minIndex, endIndex):
+    zf_inline_call sub(minIndex: int, endIndex: int):
       init:
         var idxSub = -1
       loop:
@@ -1015,7 +979,7 @@ proc inlineSub(ext: ExtNimNode) {.compileTime.} =
 
 ## Implementation of the 'exists' command.
 ## Searches the input for a given expression. If one is found "true" is returned, else "false".
-zf_inline exists(search):
+zf_inline exists(search: bool):
   init:
     result = false
   loop:
@@ -1024,7 +988,7 @@ zf_inline exists(search):
 
 ## Implementation of the 'find' command.
 ## Searches the input for a given expression. Returns an option value.
-zf_inline find(cond):
+zf_inline find(cond: bool):
   init:
     var i = 0
   loop:
@@ -1036,7 +1000,7 @@ zf_inline find(cond):
 
 ## Implementation of the 'all' command.
 ## Returns true of the given condition is true for all elements of the input, else false.
-zf_inline all(test):
+zf_inline all(test: bool):
   init:
     result = true
   loop:
@@ -1055,16 +1019,16 @@ proc findParentWithChildLabeled(node: NimNode, label: string): NimNode =
 ## Implementation of the 'foreach' command.
 ## A command may be called on each element of the input list.
 ## Changing the list in-place is also supported.
-proc inlineForeach(ext: ExtNimNode) {.compileTime.} =
+proc inlineForeach*(ext: ExtNimNode) {.compileTime.} =
+  let isEq = ext.node[1].kind == nnkExprEqExpr
+  let hasIterator = isEq and (ext.node[1][0].findNode(nnkIdent, "it") != nil)
   var adaptedExpression = ext.adapt()
   
   # special case: assignment to iterator -> try to assign to outer list (if possible)
-  if adaptedExpression.kind == nnkExprEqExpr:
-    # this only works if the current list has not (yet) been manipulated with the following methods:
-    # map, indexedMap, combinations, flatten and zip
-    if (ext.commands.intersection(CANNOT_BE_ALTERED_HANDLERS).len > 0):
-      zfFail("Cannot change list in foreach that has already been altered with: map, indexedMap, combinations, flatten or zip!")
-
+  if hasIterator:
+    if ext.itIndex > 1:
+      zfFail("Adapted list cannot be changed in-place!")
+    # this only works if the current list has not (yet) been manipulated    
     var itNode = adaptedExpression.findParentWithChildLabeled(ext.prevItNode.label) 
     if itNode != nil:
       let listRef = ext.listRef
@@ -1072,13 +1036,13 @@ proc inlineForeach(ext: ExtNimNode) {.compileTime.} =
       let rightSide = adaptedExpression.last
       # changing the iterator content will only work with indexable + variable containers
       if ext.isListType():
-        let itlist = newIdentNode(listIteratorName)
+        let itlist = newIdentNode(zfListIteratorName)
         adaptedExpression = quote:
           `itlist`.value = `rightSide`
       elif itNode == adaptedExpression:
         ext.needsIndex = true
         adaptedExpression = quote:
-         `listRef`[`index`] = `rightSide`
+          `listRef`[`index`] = `rightSide`
       else:
         ext.needsIndex = true
         # when using a dot-expression the content is first saved to a temporary variable
@@ -1089,18 +1053,19 @@ proc inlineForeach(ext: ExtNimNode) {.compileTime.} =
         adaptedExpression = quote:
           var `tempVar` = `listRef`[`index`]
           `leftSide` = `rightSide`
-  ext.node = quote:
+  elif isEq:
+    adaptedExpression = nnkAsgn.newTree(adaptedExpression[0], adaptedExpression[1])
+  ext.node = nnkStmtList.newTree().add quote do:
     `adaptedExpression`
 
 ## Implementation of the 'index' command.
 ## Returns the index of the element in the input list when the given expression was found or -1 if not found.
-zf_inline index(cond):
+zf_inline index(cond: bool):
   init:
     result = -1 # index not found
   loop:
     if cond:
       return idx
-
 
 ## Implementation of the 'fold' command.
 ## Initially the result is set to initial value given by the user, then each element is added
@@ -1150,6 +1115,7 @@ proc inlineReduce(ext: ExtNimNode) {.compileTime.} =
   # in reduce the operator has to use the newest iterator
   let nextIt = ext.nextItNode()
   if ext.label.startswith("indexed"):
+
     zf_inline_call reduce(op):
       init:
         var initAccu = true
@@ -1163,6 +1129,9 @@ proc inlineReduce(ext: ExtNimNode) {.compileTime.} =
           let newValue = op
           if not (oldValue == newValue):
             result = (idx, newValue) # propagate new value with idx
+      endLoop:
+        if initAccu:
+          result[0] = -1 # we actually do not have a result: set index to -1
 
   else:
     zf_inline_call reduce(op):
@@ -1177,7 +1146,6 @@ proc inlineReduce(ext: ExtNimNode) {.compileTime.} =
           let `nextIt` = (result, prevIt)
           result = op
 
-
 ## Implementation of the 'combinations' command.
 ## Each two distinct elements of the input list are combined to one element.
 proc inlineCombinations(ext: ExtNimNode) {.compileTime.} =
@@ -1188,9 +1156,9 @@ proc inlineCombinations(ext: ExtNimNode) {.compileTime.} =
     if ext.isListType():
       zf_inline_call combinations():
         pre:
-          let itlist = newIdentNode(listIteratorName)
+          let itList = newIdentNode(zfListIteratorName)
         loop:
-          var itListInner = `itList`.next # todo - backticks should not be needed here! (but we get: undeclared field next)
+          var itListInner = itList.next
           var idxInner = idx
           while itListInner != nil:
             let `itCombo` = createCombination([it, itListInner.value], [idx, idxInner])
@@ -1222,16 +1190,15 @@ proc inlineCombinations(ext: ExtNimNode) {.compileTime.} =
       indices.add(idxInner)
       let listRef = ext.node[idx]
       idx += 1
-      let q = quote:
+      code.add quote do:
         var `idxInner` = -1
         for `itIdent` in `listRef`:
           `idxInner` += 1
           nil
-      code = code.add(q).getStmtList()
-    let q = quote:
+      code = code.getStmtList()
+    code.add quote do:
       let `itCombo` = createCombination(`iterators`, `indices`)
       nil
-    code.add(q)
     ext.node = root
 
 ## Implementation of the `count` command. Counts all (filtered) items.
@@ -1245,10 +1212,10 @@ zf_inline count():
 proc inlineSeq(ext: ExtNimNode) {.compileTime.} =
   let itIdent = ext.nextItNode()
   let listRef = ext.listRef
+  let idxIdent = newIdentNode(zfIndexVariableName)
 
   if ext.hasMinHigh:
-    let idxIdent = newIdentNode(zfIndexVariableName)
-    let minHigh = newIdentNode(minHighVariableName)
+    let minHigh = newIdentNode(zfMinHighVariableName)
     var itDef = nnkStmtList.newTree()
     if ext.node.kind == nnkCall:
       let zipArgs = ext.adapt()
@@ -1268,28 +1235,49 @@ proc inlineSeq(ext: ExtNimNode) {.compileTime.} =
   elif ext.isListType():
     # list iterator implemnentation
     let listRef = ext.listRef
-    let itlist = newIdentNode(listIteratorName)
+    let itlist = newIdentNode(zfListIteratorName)
+    let itNext = newIdentNode("__itListNext__")
     ext.node = quote:
       var `itlist` = `listRef`.head
       while `itlist` != nil:
-        var `itIdent` = `itlist`.value
+        let `itIdent` = `itlist`.value
+        let `itNext` = `itList`.next
         nil
-    let e = quote:
-      `itlist` = `itlist`.next
-    ext.endLoop.add(e)
-  
+    ext.endLoop.add quote do:
+      `itlist` = `itNext`
+
+  elif ext.forceIndexLoop:
+    # iterate over index
+    ext.needsIndex = true
+    ext.initials.add quote do:
+      `idxIdent` = low(`listRef`)
+    ext.node = quote:
+      while (`idxIdent` <= high(`listRef`)):
+        let `itIdent` = `listRef`[`idxIdent`]
+        nil
+    # idx += 1 already done in iterHandler
+
+  elif ext.typeDescription.startswith("Option["):
+    let tpe = newIdentNode(ext.typeDescription[7..ext.typeDescription.len()-2])
+    ext.node = quote:
+      if `listRef` != none(`tpe`):
+        let `itIdent` = `listRef`.get()
+        nil
+
   else:
     # usual iterator implementation
     ext.node = quote:
       for `itIdent` in `listRef`:
         nil
-  
+
 proc ensureFirst(ext: ExtNimNode) {.compileTime.} =
   if ext.itIndex > 0:
     error("$1 supposed to be first - index is $2" % [ext.label, $ext.itIndex], ext.node)
 
 macro createExtendDefaults(): untyped =
   # creates proc zfExtendDefaults   
+  # add inlineForeach + inlineDef manually
+  addFunction($Command.foreach)
   let (funDef,_) = createExtensionProc("Defaults", nil)
   zfFunctionNames = @[]
   result = quote:
@@ -1303,20 +1291,13 @@ proc inlineElement(ext: ExtNimNode) {.compileTime.} =
     return # command has been handled
   if ext.node.kind == nnkCall and (ext.itIndex > 0):
     case label:
-    of $Command.zip:
-      ext.ensureFirst()
-      if not ext.hasMinHigh:
-        zfFail("internal error: 'minHigh' should be defined!")
-      ext.inlineSeq()
-    of $Command.foreach:
-      ext.inlineForeach()
+    of "any":
+      warning("any is deprecated - use exists instead")
+      ext.inlineExists()
     else:
-      if "any" == label:
-        warning("any is deprecated - use exists instead")
-        ext.inlineExists()
-      elif (label.toReduceCommand() != none(ReduceCommand)):
+      if (label.toReduceCommand() != none(ReduceCommand)):
         ext.inlineReduce()
-      else:
+      elif label != "":
         let res = zfExtension(ext)
         if res == nil:
           zfFail("add implementation for command '$1'" % label)
@@ -1341,7 +1322,6 @@ type
     currentIt: V
     currentIdx: Natural
     length: int
-  StopIteration* = object of Exception
   
   ## Helper to allow `[]` access for slices
   MkSliceIndexable[T] = ref object
@@ -1359,7 +1339,7 @@ proc `[]`*[T,U,V] (items: var MkListIndexable[T,U,V], idx: Natural): T =
     items.currentIt = items.currentIt.next
     items.currentIdx += 1
   if items.currentIt == nil:
-    raise newException(StopIteration, "index too large!")
+    return nil
   items.currentIdx += 1
   let value = items.currentIt.value
   items.currentIt = items.currentIt.next
@@ -1379,15 +1359,20 @@ proc `[]`*[T] (items: MkSliceIndexable[T], idx: Natural): T =
 proc high*(items: MkSliceIndexable): int =
   int(items.slice.b - items.slice.a)
 
-## Wraps the given node with `mkIndexable` when the node type does not support access with `[]`
-proc wrapIndexable(a: NimNode): NimNode {.compileTime.} =
-  let q = quote:
+## Helper macro to wrap a not indexable type to an indexable type
+macro zfIndexableChk(a: untyped): untyped =
+  result = quote:
     when not compiles(`a`[0]) or not compiles(high(`a`)):
       when not compiles(mkIndexable(`a`)):
         static:
           zfFail("need to provide an own implementation for mkIndexable(" & $`a`.type & ")")
       else:
         var `a` = mkIndexable(`a`)
+
+## Wraps the given node with `mkIndexable` when the node type does not support access with `[]`
+proc wrapIndexable(a: NimNode): NimNode {.compileTime.} =
+  let q = quote:
+    zfIndexableChk(`a`)
   result = q
 
 ## Replaces zip(a,b,c) --> ... with something like
@@ -1430,17 +1415,202 @@ proc replaceZip(args: NimNode) : NimNode {.compileTime.} =
       args[idx] = newCall($Command.map, params)
     idx += 1
   if highList.len > 0:
-    let minHigh = newIdentNode(minHighVariableName)
-    let i = quote:
+    let minHigh = newIdentNode(zfMinHighVariableName)
+    result.add quote do:
       let `minHigh`= min(`highList`)
-    result.add(i)
 
+## Gets the result type, depending on the input-result type and the type-description of the input type.
+## When the result type was given explicitly by the user that type is used.
+## Otherwise the template argument is determined by the input type.
+proc getResType(resultType: string, td: string): (NimNode, bool) {.compileTime.} =
+  if resultType == nil:
+    return (nil, false)
+  var resType = resultType
+  let explicitType = not resultType.endswith(implicitTypeSuffix)
+  if not explicitType:
+    resType = resType[0..resType.len-1-implicitTypeSuffix.len]
+
+  let idx = resType.find("[")
+  if idx != -1:
+    result = (parseExpr(resType), explicitType)
+  else:
+    let res = newIdentNode(resType)
+    let idx2 = td.find("[")
+    var q : NimNode 
+    if idx2 != -1:
+      var tdarg = td[idx2+1..td.len-2]
+      let idxComma = tdarg.find(", ")
+      let idxBracket = tdarg.find("[")
+      if idxComma != -1 and (idxBracket == -1 or idxBracket > idxComma) and resType != "array":
+        # e.g. array[0..2,...] -> seq[...]
+        tdarg = tdarg[idxComma+2..tdarg.len-1]
+      q = parseExpr(resType & "[" & tdarg & "]")
+    else:
+      q = quote:
+        `res`[int] # this is actually a dummy type
+    result = (q, false)
+
+macro iteratorTypeTd(td: typedesc): untyped =
+  let kind = td.getType[1][1].kind
+  if kind == nnkBracketExpr and td.getType[1][1][0].kind == nnkSym and td.getType[1][1][0].repr == "array" and td.getType[1][1][1].kind == nnkBracketExpr and td.getType[1][1][1][0].repr == "range":
+    # special handling for ranges (in arrays)
+    let f = td.getType[1][1][1][1]
+    let t = td.getType[1][1][1][2]
+    let tpe = td.getType[1][1][2]
+    result = quote:
+      array[`f`..`t`, `tpe`]
+  elif kind == nnkBracketExpr:
+    # special handling for tuples
+    result = newPar()
+    for i in 1..td.getType[1][1].len-1:
+      result.add(td.getType[1][1][i])
+  elif kind == nnkEnumTy:
+    result = td.getTypeInst[1][0][0]
+  else:
+    result = td.getType[1][1]
+
+macro iteratorType*(td: untyped): untyped =
+  quote:
+    iteratorTypeTd(`td`.type)
+
+proc createIteratorFunction(args: NimNode): NimNode =
+  let iterName = newIdentNode(zfInternalIteratorName)
+  if createProc:
+    result = quote:
+      proc `iterName`(): auto = 
+        nil
+  else:
+    result = quote:
+      iterator `iterName`(): auto = 
+        nil
+
+
+## Creates the function that returns the final result of all combined commands.
+## The result type depends on map, zip or flatten calls. It may be set by the user explicitly using to(...)
+proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool, resultType: string, td: string, loopDef: NimNode, forceSeq: bool, isIter: bool): NimNode =
+  var (resType, explicitType) = getResType(resultType, td)
+  var collType = if resType != nil: resType.repr else: td
+
+  var hasIter = false
+  var itFun: NimNode = nil
+  var itDef: NimNode = nil
+
+  if isSeq and not isIter and (resType != nil or forceSeq):
+    if not explicitType and (collType.find("[") != -1 or forceSeq):
+      hasIter = true
+      itFun = args.createIteratorFunction()
+      itFun.getStmtList().add(loopDef)
+      itDef = itFun[0]
+
+  let resultIdent = newIdentNode("result")
+  var autoProc = quote:
+    (proc(): auto =
+      nil)
+  var code: NimNode = nil
+
+  # set a default result in case the resType is not nil - this result will be used
+  # if there is no explicit map, zip or flatten operation called
+  if resType != nil:
+    code = quote:
+      var res: `resType` 
+      `resultIdent` = zfInit(res)
+
+  # check explicitType: type was given explicitly (inclusive all template arguments) by user,
+  # then we use resType directly:
+  if explicitType:
+    discard # use default result above
+  elif isSeq:
+    # now we try to determine the result type of the operation automatically...
+    # this is a bit tricky as the operations zip, map and flatten may / will alter the result type.
+    # hence we try to apply the map-operation to the iterator, etc. to get the resulting iterator (and list) type.
+    var listRef = args[0]
+    if listRef.kind == nnkCall and listRef[0].label == $Command.zip:
+      listRef = listRef.findNode(nnkPar)[0][0]
+    
+    let i = collType.find("[")
+    let isTuple = collType.startswith("(") and collType.endswith(")")
+    if not isTuple and (i != -1 and hasIter and (not forceSeq or resultType != nil)):
+      collType = collType[0..i-1]
+      let collSym = parseExpr(collType)
+      let resDef =
+        if collType == "array":
+          quote:
+            array[`listRef`.len, iteratorType(`itDef`)]
+        else:
+          quote:
+            `collSym`[iteratorType(`itDef`)]
+      code = quote:
+        var res: `resDef`
+        `resultIdent` = zfInit(res)
+
+    elif isTuple:
+      let num = collType.split(",").len()
+      ext.needsIndex = true
+      if num < 2 or num > 5:
+        zfFail("Tuple return types are only supported from 2 up to 5 elements")
+      let x = genSym(nskVar, "x")   
+      let init = nnkAsgn.newTree(`resultIdent`, nnkPar.newTree())
+      for _ in 1..num:
+        init[1].add(x)
+      code = quote:
+        var `x`: iteratorType(`itDef`)
+        `init`
+
+    elif forceSeq and hasIter:
+      code = quote:
+        var res: seq[iteratorType(`itDef`)]
+        `resultIdent` = zfInit(res)
+    else:
+      # use the same type as in the original list
+      code = nnkStmtList.newTree().add quote do:
+        `resultIdent` = zfInit(`listRef`)
+
+  if isSeq:
+    let idx = newIdentNode(zfIndexVariableName)
+    # unfortunatly it does not (yet) work in Nim to define iterators anywhere in Nim and get a result from it
+    # so defining an iterator inside an anonymous proc (this generated one) - inside another proc - yields no results
+    # so we copy everything - this is also a tad more efficient for the running code in the end...
+    if hasIteratorBug or not hasIter:
+      var addLoop = loopDef.findNode(nnkStmtList)
+      if hasIter:
+        addLoop = addLoop.copyNimTree()
+      # there should only be one yield statement - replace it with zfAddItem
+      let (yieldStmt,path) = addLoop.findNodePath(nnkYieldStmt)
+      code.add(addLoop.apply(path, ext.addElemResult(yieldStmt[0])))
+      # due to a further bug in nim we now replace the iterator with an actual proc
+      if createProc and hasIter:
+        let yield2 = loopDef.findNode(nnkYieldStmt)
+        if yield2 != nil:
+          let ret2 = nnkReturnStmt.newTree(yield2[0])
+          discard loopDef.replace(yield2, ret2)
+    else:
+      let it = newIdentNode(internalIteratorName)
+      code.add quote do:
+        var `idx` = 0
+        for `it` in `itDef`():
+          zfAddItem(`resultIdent`, `idx`, `it`)
+          `idx` += 1
+
+  # no sequence output:
+  # we do _not_ need to initialize the resulting list type here
+  else:
+    code = nil
+
+  let stmtInit = autoProc.getStmtList()
+  if code != nil:
+    stmtInit.add(code)
+  stmtInit.add(newNilLit())
+  if itFun != nil:
+    autoProc.findNode(nnkStmtList).insert(0, itFun)
+  result = autoProc
+  
 ## Check if the "to" parameter is used to generate a specific result type.
 ## The requested result type is returned and the "to"-node is removed.
-proc checkTo(args: NimNode, td: string): string {.compileTime.} = 
+proc checkTo(args: NimNode, td: string): string {.compileTime.} =
   let last = args.last
+  let hasTo = last.kind == nnkCall and last[0].repr == $Command.to 
   var resultType : string = nil
-  if last.kind == nnkCall and last[0].repr == $Command.to:
+  if hasTo:
     args.del(args.len-1) # remove the "to" node
     if args.len <= 1:
       # there is no argument other than "to": add default mapping function "map(it)"
@@ -1450,9 +1620,15 @@ proc checkTo(args: NimNode, td: string): string {.compileTime.} =
         zfFail("'to' can only be used with list results - last arg is '" & args.last[0].label & "'")
     resultType = last[1].repr
     if resultType == "list": # list as a shortcut for DoublyLinkedList
-      resultType = "DoublyLinkedList"
+      resultType = "DoublyLinkedList" & implicitTypeSuffix
     elif resultType.startswith("list["):
       resultType = "DoublyLinkedList" & resultType[4..resultType.len-1]
+    elif resultType == "set": # set as a shortcut for HashSet
+      resultType = "HashSet" & implicitTypeSuffix
+    elif resultType.startswith("set["):
+      resultType = "HashSet" & resultType[3..resultType.len-1]
+    elif resultType == "seq":
+      resultType = defaultResultType
   if resultType == nil:
     for arg in args:
       if arg.kind == nnkCall:
@@ -1462,7 +1638,7 @@ proc checkTo(args: NimNode, td: string): string {.compileTime.} =
         let isSeq = label.endswith("Seq") 
         let isList = label.endswith("List")
         # Check forced sequences or lists
-        if isSeq or isList or label in FORCE_SEQ_HANDLERS:
+        if isSeq or isList:
           if isSeq:
             arg[0] = newIdentNode(label[0..label.len-4])
           elif isList:
@@ -1482,32 +1658,146 @@ proc checkTo(args: NimNode, td: string): string {.compileTime.} =
   result = resultType
 
 ## Main function that creates the outer function call.
-proc iterHandler(args: NimNode, debug: bool, td: string): NimNode {.compileTime.} =
+proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compileTime.} =
+  let debug = debugInfo.len() > 0
   let orig = if debug: args.copyNimTree() else: nil
   let resultType = args.checkTo(td) 
   let preInit = args.replaceZip() # zip is replaced with map + filter
   let hasMinHigh = preInit.len > 0
   var lastCall = args.last[0].label
   let isIter = lastCall == $Command.createIter
+  var iterNode: NimNode = nil
   if isIter:
     lastCall = args[args.len-2][0].label
+    let iterName = newIdentNode(args.last[1].label)
+    args.del(args.len-1)
+    if not (args.last[0].label in SEQUENCE_HANDLERS):
+      zfFail("'iter' can only be used with list results - last arg is '" & args.last[0].label & "'")
+    iterNode = quote:
+      iterator `iterName`(): auto = 
+        nil
+  
   let isSeq = lastCall in SEQUENCE_HANDLERS
-
-  var defineIdxVar = not hasMinHigh and not isIter
+  
+  var defineIdxVar = (not hasMinHigh and not isIter and not td.startswith("Option[")) and (isSeq and hasIteratorBug) 
   var needsIndexVar = false
 
-  if ((not isIter and (resultType != nil and resultType.startswith("array") or 
-      (resultType == nil and td.startswith("array")))) or
+  if ((not isIter and (isSeq and (resultType != nil and resultType.startswith("array") or 
+      (resultType == nil and td.startswith("array"))))) or
       args.findNode(nnkIdent, zfIndexVariableName) != nil):
       needsIndexVar = true
   
-  var code: NimNode
+  let init = nnkStmtList.newTree()
+  let initials = nnkStmtList.newTree()
+  let varDef = nnkStmtList.newTree()
+  init.add(varDef)
+  init.add(initials)
+
+  var codeStart = nnkStmtList.newTree()
+  var code = codeStart
+
+  var index = 1
+  let listRef = args[0]
+  let finals = nnkStmtList.newTree()
+  let endLoop = nnkStmtList.newTree()
+
+  var argIdx = 1
+  var ext: ExtNimNode
+  var forceIndexLoop = false
+  var delegateUntil = -1
+
+  while argIdx <= args.len: # args could be changed
+    let argIdxReal = if argIdx == args.len: 0 else: argIdx
+    let arg = args[argIdxReal]
+    let isLast = argIdxReal == args.len-1
+    var oldIndex = index
+    if argIdxReal == 0:
+      index = 0
+    ext = ExtNimNode(node: arg, 
+                    nodeIndex: argIdxReal,                    
+                    prevItIndex: index-1,
+                    itIndex: index, 
+                    isLastItem: isLast,
+                    initials: initials,
+                    endLoop: endLoop,
+                    finals: finals,
+                    listRef: listRef,
+                    args: args,
+                    typeDescription: td,
+                    resultType: resultType,
+                    needsIndex: needsIndexVar,
+                    hasMinHigh: hasMinHigh,
+                    isIter: isIter,
+                    adapted: -1,
+                    elemAdded: false,
+                    forceIndexLoop: forceIndexLoop,
+                    delegateUntil: delegateUntil)
+    argIdx += 1
+    ext.inlineElement()
+    forceIndexLoop = forceIndexLoop or ext.forceIndexLoop
+    delegateUntil = ext.delegateUntil
+    index = ext.itIndex
+    let newCode = ext.node.getStmtList()
+
+    if argIdxReal == 0:
+      # the actual outer loop is created last - so insert the functions here
+      newCode.add(codeStart)
+      # and set the current outer loop as new codeStart
+      codeStart = nnkStmtList.newTree().add(ext.node)
+      index = oldIndex
+    else:
+      code.add(ext.node)
+
+    # make sure the collection is created
+    if (argIdx == args.len) and not ext.elemAdded and arg.label in SEQUENCE_HANDLERS:
+      var node = newCode
+      if node == nil:
+        # directly append the adding function
+        node = code
+      node.add(ext.addElem(mkItNode(ext.itIndex-1)))
+
+    if newCode != nil:
+      code = newCode
+    if not hasMinHigh and not defineIdxVar:
+      defineIdxVar = ext.needsIndex
+  # end of loop
+    
+  if not hasMinHigh and defineIdxVar:
+    let idxIdent = newIdentNode(zfIndexVariableName)
+    varDef.add quote do:
+      var `idxIdent` = 0 
+
+  # add the actual loop section
+  init.add(codeStart)
+
+  # add the endLoop section
+  # could be combinations of for and while, but only one while (for list types)
+  var loopNode: NimNode = nil
+  if endLoop.len > 0 or (not hasMinHigh and defineIdxVar):
+    loopNode = if (td.isListType() or ext.forceIndexLoop): codeStart.findNode(nnkWhileStmt) else: codeStart.findNode(nnkForStmt)
+  if endLoop.len > 0:
+    assert(loopNode != nil)
+    loopNode.last.add(endLoop)
+  if loopNode != nil and not hasMinHigh and defineIdxVar:
+    # add index increment to end of the for loop
+    let idxIdent = newIdentNode(zfIndexVariableName)
+    loopNode.last.add quote do:
+      `idxIdent` += 1
+  
+  # add the finals section
+  if finals.len > 0:
+    init.add(finals)  
+    
   let needsFunction = (lastCall != $Command.foreach)
   if needsFunction:
-    result = args.createAutoProc(isSeq, resultType, td)
+    let theProc = if isIter: iterNode else: ext.createAutoProc(args, isSeq, resultType, td, init, index > 1, isIter)
+    result = theProc
     code = result.last.getStmtList() 
-    if (isIter):
+    if isIter:
       code = result.getStmtList()
+      code.add(init)
+    if not isSeq:
+      code.insert(0,init)
     if preInit.len > 0:
       code.insert(0, preInit)
     if not isIter:
@@ -1515,133 +1805,48 @@ proc iterHandler(args: NimNode, debug: bool, td: string): NimNode {.compileTime.
   else:
     # there is no extra function, but at least we have an own section here - preventing double definitions
     var q = quote:
-      if true:
+      block:
         `preInit`
         nil
     result = q
-    code = q.getStmtList()
-  var init = code
-  let initials = nnkStmtList.newTree()
-  let varDef = nnkStmtList.newTree()
-  init.add(varDef)
-  init.add(initials)
+    code = q.getStmtList().add(init)
+  
+  if debug:
+    echo ""
+    echo debugInfo
+    echo "# " & orig[0].repr & ".zfun:"
+    var i = 1
+    var fun = ""
+    while i < orig.len():
+      fun = orig[i].label
+      if fun != "" and i < orig.len() - 2 and fun == orig[i+1].label:
+        echo "#   " & orig[i].label & ":"
+        while fun == orig[i].label:
+          echo "#     " & orig[i][1].repr
+          i += 1
+      else:
+        echo "#   " & orig[i].repr
+        i += 1
 
-  var index = 0
-  let listRef = args[0]
-  let finals = nnkStmtList.newTree()
-  let endLoop = nnkStmtList.newTree()
-  var startNode: NimNode = nil
-
-  var commands: seq[Command] = @[]
-  var argIdx = 0
-  while argIdx < args.len: # args could be changed
-    let arg = args[argIdx]
-    let isLast = argIdx == args.len-1
-    argIdx += 1
-    
-    if arg.kind == nnkCall:
-      let label = arg[0].label
-      let cmdCheck = label.toCommand()
-      if none(Command) != cmdCheck:
-        commands.add(cmdCheck.get())
-
-    let cmdName = arg.label
-    let ext = ExtNimNode(node: arg, 
-                         commands: commands.toSet(),
-                         prevItIndex: index-1,
-                         itIndex: index, 
-                         isLastItem: isLast,
-                         initials: initials,
-                         endLoop: endLoop,
-                         finals: finals,
-                         listRef: listRef,
-                         args: args,
-                         typeDescription: td,
-                         resultType: resultType,
-                         needsIndex: needsIndexVar,
-                         hasMinHigh: hasMinHigh,
-                         isIter: isIter,
-                         adapted: -1,
-                         elemAdded: false)
-    ext.inlineElement()
-    let newCode = ext.node.getStmtList()
-    code.add(ext.node)
-
-    # make sure the collection is created
-    if (argIdx == args.len) and not ext.elemAdded and cmdName in SEQUENCE_HANDLERS:
-      var node = newCode
-      if node == nil:
-        # directly append the adding function
-        node = code
-      node.add(ext.addElem(mkItNode(ext.itIndex-1)))
-
-    if startNode == nil:
-      startNode = ext.node
-    if newCode != nil:
-      code = newCode
-    if not hasMinHigh and not defineIdxVar:
-      defineIdxVar = ext.needsIndex
-    index = ext.itIndex
-  if not hasMinHigh and defineIdxVar:
-    let idxIdent = newIdentNode(zfIndexVariableName)
-    let identDef = quote:
-      var `idxIdent` = 0 
-    varDef.add(identDef)
-
-  if finals.len > 0:
-    init.add(finals)  
-    
-  # could be combinations of for and while, but only one while (for DoublyLinkedList) -> search while first
-  var loopNode = startNode.findNode(nnkWhileStmt) 
-  if loopNode == nil:
-    loopNode = startNode.findNode(nnkForStmt)
-  if endLoop.len > 0:
-    loopNode.last.add(endLoop)
-
-  if not hasMinHigh and defineIdxVar and loopNode != nil:
-    # add index increment to end of the for loop
-    let idxIdent = newIdentNode(zfIndexVariableName)
-    let incrIdx = quote:
-      `idxIdent` += 1
-    loopNode.last.add(incrIdx)
-
-  if (debug):
-    echo("# " & repr(orig).replace(",", " -->"))
     echo(repr(result).replace("__", ""))
     # for the whole tree do (but this could crash):
     # echo(treeRepr(result))
   
-## Determines the closest possible type info of the input parameter to "-->".
-## Sometimes the getType (node) works best, sometimes getTypeInst (nodeInst).
-proc getTypeInfo(node: NimNode, nodeInst: NimNode): string =
-  var typeinfo = node
-  if typeinfo.len > 0:
-    if node.kind == nnkEnumTy:
-      result = "enum"
-    elif ($typeinfo[0] == "ref"):
-      result = $typeinfo[1]
-      let idx = result.find(":")
-      if idx != -1:
-        result = result[0..idx-1]
-    else:
-      let res = repr(nodeInst)
-      if res == nil:
-        result = repr(node)
-      else:
-        result = res
+proc dbgLineInfo(a: NimNode, debug: bool): string =
+  if debug or debugAll:
+    let l = a.lineInfoObj
+    var idx = l.filename.rfind('\\')
+    if idx == -1:
+      idx = l.filename.rfind('/')
+    result = "# $1:$2" % [$l.filename[idx+1..^1], $l.line]
   else:
-    let n1 = node.repr
-    let n2 = nodeInst.repr
-    if n2 == nil or n1.len > n2.len:
-      result = n1
-    else:
-      result = n2
+    result = ""
 
-macro connectCall(td: typedesc, args: varargs[untyped]): untyped = 
-  result = iterHandler(args, false, getTypeInfo(td.getType[1], td.getTypeInst[1]))
+macro connectCall(td: typedesc, callInfo: untyped, args: varargs[untyped]): untyped =
+  result = iterHandler(args, getTypeInfo(td.getType[1], td.getTypeInst[1]), callInfo.repr[1..^2])
 
 ## Preparse the call to the iterFunction.
-proc delegateMacro(a: NimNode, b1:NimNode, debug: bool, td: string): NimNode =
+proc delegateMacro(a: NimNode, b1:NimNode, td: string, debugInfo: string): NimNode =
   var b = b1
 
   # we expect b to be a call, but if we have another node - e.g. infix or bracketexpr - then
@@ -1678,14 +1883,14 @@ proc delegateMacro(a: NimNode, b1:NimNode, debug: bool, td: string): NimNode =
       break
   for it in m:
     args.add(it)
-  result = iterHandler(args, debug, td)
+  result = iterHandler(args, td, debugInfo)
 
   if path != nil: # insert the result back into the original tree
     result = outer.apply(path, result)
 
 ## delegate call to get the type information.
-macro delegateArrow(td: typedesc, a: untyped, b: untyped, debug: static[bool]): untyped =
-  result = delegateMacro(a, b, debug, getTypeInfo(td.getType[1], td.getTypeInst[1]))
+macro delegateArrow(td: typedesc, a: untyped, b: untyped, debugInfo: untyped): untyped =
+  result = delegateMacro(a, b, getTypeInfo(td.getType[1], td.getTypeInst[1]), debugInfo.repr[1..^2])
   
 ## The arrow "-->" should not be part of the left-side argument a.
 proc checkArrow(a: NimNode, b: NimNode, arrow: string): (NimNode, NimNode, bool) =
@@ -1706,24 +1911,44 @@ macro connect*(args: varargs[untyped]): untyped =
   result = quote:
     connectCall(type(`args`[0]), `args`)
   
+macro zfunCall(td: typedesc, debug: static[bool], a: untyped, b: untyped): untyped = 
+  let b2 = nnkStmtList.newTree(a)
+  for c in b:
+    if c.kind == nnkCall and c.len == 2 and c[1].kind == nnkStmtList:
+      for callParam in c[1]:
+        b2.add(newCall(c[0], callParam))
+    else:
+      b2.add(c)
+  result = iterHandler(b2, getTypeInfo(td.getType[1], td.getTypeInst[1]), b.dbgLineInfo(debug or debugAll))
+
+macro zfun*(a: untyped, b: untyped): untyped =
+  result = quote:
+    zfunCall(type(`a`), false, `a`, `b`)
+
+macro zfunDbg*(a: untyped, b: untyped): untyped =
+  result = quote:
+    zfunCall(type(`a`), true, `a`, `b`)
+
 ## general macro to invoke all available zero_functional functions
 macro `-->`*(a: untyped, b: untyped): untyped =
-  let (a,b,debug) = checkArrow(a,b,"-->")
-  if a.kind == nnkIdent:
+  let (a,b2,debug) = checkArrow(a,b,"-->")
+  let l = b.dbgLineInfo(debug or debugAll)
+  if a.label != $Command.zip:
     if not debug: # using debug (or `debug`) directly does not work (?!)
       result = quote:
-        delegateArrow(type(`a`), `a`, `b`, false)
+        delegateArrow(type(`a`), `a`, `b2`, `l`)
     else:
       result = quote:
-        delegateArrow(type(`a`), `a`, `b`, true)
+        delegateArrow(type(`a`), `a`, `b2`, `l`)
   else:
-    result = delegateMacro(a, b, debug, "seq")
+    result = delegateMacro(a, b2, "seq", l)
 
 ## use this macro for debugging - will output the created code
 macro `-->>`*(a: untyped, b: untyped): untyped =
-  let (a,b,_) = checkArrow(a,b,"-->")
-  if a.kind == nnkIdent:
+  let (a,b2,_) = checkArrow(a,b,"-->")
+  let l = b2.dbgLineInfo(true)
+  if a.label != $Command.zip:
     result = quote:
-      delegateArrow(type(`a`), `a`, `b`, true)
+      delegateArrow(type(`a`), `a`, `b2`, `l`)
   else:
-    result = delegateMacro(a, b, true, "seq")
+    result = delegateMacro(a, b2, "seq", l)
