@@ -14,7 +14,7 @@ var n = zip(a, b) -->
             all(it > 4)
 ```
 
-is expanded on compile time to the equivalent of:
+is expanded on compile time - additional compile-time checks omitted - to the equivalent of:
 
 ```nim
 (proc (): auto =
@@ -151,7 +151,7 @@ proc zfInit(a: MyType): MyType =
 
 These are not exactly the functions from sequtils, they have the same naming and almost the same behavior.
 
-The macro works `-->` or `connect`. Multiple `-->` may be used or `.`.
+The macros work with `-->`, `zfun` or `connect`. Multiple `-->` may be used or `.`.
 
 ```nim
 sequence --> map(..) --> all(..)
@@ -164,7 +164,16 @@ zip(a, b, c) --> map(..).
                  all(..)
 ```
 
-You can also use
+You can also use the call with sections - with the above calls omitting the dots or arrows or with several statements applied to the same function in one section.
+```nim
+let res = sequence.zfun:
+  map:
+    f1(it)
+    f2(it)
+  all(...)
+```
+
+or as simple arguments to a function:
 
 ```nim
 connect(collection, map(..), all(..))
@@ -188,6 +197,11 @@ check(x == [2,4,6])
 ```
 Map also supports converting the type of iterator item and thus of the collection.
 
+Map is (currently) the only command supporting value definitions inside the map call that may be used instead or additionally to the `it` value in subsequent calls. Assignment to simple values or tuple assignments are possible as well.
+```nim
+let idx = rows --> map(row = it) --> index(row > someValue)
+let posCoords = coords --> map((x,y) = it) --> filter(x > 0 and y > 0)
+```
 
 ### filter
 
@@ -438,12 +452,12 @@ if debug:
 
 ## Extending zero-functional
 
-*This feature is still experimental but already working.*
+*This feature is still experimental.*
 
 Extending zero-functional with own functions is probably more complicated than with other fp-libraries as the functions have to be implemented with macros producing imperative code. 
 Some good examples - 2 very basic and 2 more complicated - can be found in [test.nim: registerExtension](test.nim) and also in the source code of [zero-functional](zero-functional.nim)
 
-Example - implement the map function:
+Example - implement the (simple) map function:
 ```nim
 zf_inline map(f):
   loop:
@@ -578,7 +592,7 @@ a -->> foreach(echo(it))
 
 will print during compilation:
 ```nim
-if true:
+block:
   for __it__0 in a:
     echo(__it__0)
 ```
