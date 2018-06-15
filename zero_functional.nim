@@ -19,6 +19,7 @@ const debugAll = false
 
 # See bug https://github.com/nim-lang/Nim/issues/7787
 const hasIteratorBug = true
+const createProc = hasIteratorBug
 
 type 
 
@@ -1474,9 +1475,15 @@ macro iteratorType*(td: untyped): untyped =
 
 proc createIteratorFunction(args: NimNode): NimNode =
   let iterName = newIdentNode(zfInternalIteratorName)
-  result = quote:
-    iterator `iterName`(): auto = 
-      nil
+  if createProc:
+    result = quote:
+      proc `iterName`(): auto = 
+        nil
+  else:
+    result = quote:
+      iterator `iterName`(): auto = 
+        nil
+
 
 ## Creates the function that returns the final result of all combined commands.
 ## The result type depends on map, zip or flatten calls. It may be set by the user explicitly using to(...)
@@ -1570,6 +1577,12 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool, resultType: str
       # there should only be one yield statement - replace it with zfAddItem
       let (yieldStmt,path) = addLoop.findNodePath(nnkYieldStmt)
       code.add(addLoop.apply(path, ext.addElemResult(yieldStmt[0])))
+      # due to a further bug in nim we now replace the iterator with an actual proc
+      if createProc and hasIter:
+        let yield2 = loopDef.findNode(nnkYieldStmt)
+        if yield2 != nil:
+          let ret2 = nnkReturnStmt.newTree(yield2[0])
+          discard loopDef.replace(yield2, ret2)
     else:
       let it = newIdentNode(internalIteratorName)
       code.add quote do:
