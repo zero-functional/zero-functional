@@ -881,6 +881,6 @@ suite "valid chains":
         row > 0
       all:
          row mod 2 == 0
-		 
+     
     check(res)
     check(cnt == a.len)
