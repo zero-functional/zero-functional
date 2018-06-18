@@ -464,18 +464,18 @@ zf_inline map(f):
     let it = f # create the next iterator in the loop setting it to the given parameter of the map function
 ```
 
-`zf_inline` is the actual macro that takes the created function name (here: map) and its parameters and a body with different sections as input.
+`zf_inline` is the actual macro that takes the created function name (here: `map`) and its parameters and a body with different sections as input.
 
-The sections are:
+The sections directly map to their counterparts in `ExtNimNode`:
 - `pre` prepare section: initialize variables and constants 
 	- all variables that are used in other sections have to be defined here!
 - `init` variable initialization before the loop
-- `loop` the actual loop action (ext.node)
+- `loop` the actual loop action (maps to `ext.node`)
 - `delegate` delegate to other functions (like map, filter, etc.)
-- `end` added to end of the loop (ext.endLoop) - maybe not necessary
+- `endLoop` added to end of the loop
 - `final` after the loop section - e.g. to set the result
 
-The above map will be translated to:
+The above `map` definition will be translated to:
 ```nim
 proc inlineMap*(ext: ExtNimNode) {.compileTime.} =
   # do some parameter checks
@@ -494,8 +494,8 @@ proc inlineMap*(ext: ExtNimNode) {.compileTime.} =
     let `nextIdent` = `f` # here the `it` is replaced by the next iterator
 ```
 
-The above `map` function also does not set a result - hence the result type is a collection result type, which can be determined automatically.
-The `it` again is seen as keyword and the definition `let it = ...` will internally set the new iterator value which is consequently used by the next functions.
+The Zero-DSL `map` function does not set the `result` as opposed to the `count` or `index` definition below - hence the result type is a collection result type, which is determined automatically by the zero_functional framework.
+The `it` again is seen as keyword and the definition `let it = ...` will internally set the new iterator value which is consequently used by the next functions. In the generated macro it is replaced by the call `ext.nextItNode`.
 
 While Zero-DSL is quite powerful, not all possibilities can be handled by it when implementing a function. For instance the `foreach` implementation is done completely manually and `reduce` and other functions use the macro `zf_inline_call` which provides Zero-DSL within a manual function implementation and also registers the function name.
 The signature for creating an inline function is as in the `inlineMap` example above - each function `foo` is implemented by its `inlineFoo*(ext: ExtNimNode)` counterpart.
@@ -511,15 +511,14 @@ zf_inline index(cond: bool):
     if cond:
       return idx
 ```
-The `cond: bool` definition adds additional compile time checks to the generated macros, so that when using the index-function a compile error with the wrong parameter and the expected type is created.
+The `cond: bool` definition adds additional compile time checks to the generated macros, so that when using the `index`-function with a different type than `bool` a compile error with the wrong parameter and the expected type is created.
 In this example also the `idx` variable is replaced automatically with the running index that is increment during the loop.
 
 Special variables for `zf_inline` statements are:
 - `it`: when used is the previous iterator, when defined with `let it = ` creates a new iterator
 - `idx`: the running index in the loop
 - `result`: the overall result and return type of the operation
-All other variables have to be defined in the `pre`-section, also when automatically assigned. 
-E.g. `combinations` sets a variable `c`, but when `combinations` is used in the `delegate` section, the variable `c` has to be defined in the `pre` section of the function that calls `combinations`.
+All other variables have to be defined in the `pre`-section, also when automatically assigned, e.g. `combinations` sets a variable `c`, but when `combinations` is used in the `delegate` section, the variable `c` has to be defined in the `pre` section of the function that calls `combinations`.
 See `intersect` or `removeDoubles` implementation in [test.nim](test.nim) as an example.
 
 The manual `inline`-implementations should follow certain rules. 
