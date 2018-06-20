@@ -437,15 +437,15 @@ let l2: DoublyLinkedList[string] = l
 echo(l2)
 ```
 
-### iter
+### createIter
 
-When using `iter(name)` as last function then an iterator `name` is created which can be used for further processing with zero-functional with only a small overhead.
+When using `createIter(name)` as last function then an iterator `name` is created which can be used for further processing with zero-functional with only a small overhead.
 Similar to `to` this is also a virtual function which is internally replaced and only used to check the output type.
 The generated iterator is inline and can not be returned from a proc or given to another proc (see [Nim: Iterators](https://nim-lang.org/docs/manual.html#iterators-and-the-for-statement-first-class-iterators)).
 
 ```nim
 # filter all lines containing the word error in the iterator
-myFileIterator --> filter("error" in it) --> iter(errorLines)
+myFileIterator --> filter("error" in it) --> createIter(errorLines)
 if debug:
   errorLines() --> echo(it) # () must be used when working with iterators
 ```
@@ -565,7 +565,7 @@ The result type depends on the function used as last parameter.
 |foreach        |   +       |     +      |     +      | void                        |
 |index          |           |            |     +      | int                         |
 |indexedMap     |   +       |     +      |     +      | seq[(int,*)]                |
-|iter           |           |            |  virtual   | iterator of given type      |
+|createIter     |           |            |  virtual   | iterator of given type      |
 |map            |   +       |     +      |     +      | collType[*]                 |
 |reduce         |           |            |     +      | *                           |
 |sub            |   +       |     +      |     +      | part coll / zeroed array    |
