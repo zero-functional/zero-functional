@@ -90,9 +90,8 @@ type
     b.add(T)
   
 
-static: 
-  ## Contains all functions that may result in a sequence result. Elements are added automatically to SEQUENCE_HANDLERS
-  var SEQUENCE_HANDLERS = [$Command.map, $Command.combinations, $Command.sub].toSet()
+## Contains all functions that may result in a sequence result. Elements are added automatically to SEQUENCE_HANDLERS
+var SEQUENCE_HANDLERS {.compileTime.} = [$Command.map, $Command.combinations, $Command.sub].toSet()
 
 ## Can be read in test implementation
 var lastFailure {.compileTime.} : string = "" 
