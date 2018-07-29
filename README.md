@@ -233,6 +233,12 @@ For `zip` in order to work properly all arguments have to support access with `[
 If those procedures are not available the macro tries to call the procedure `mkIndexable` on that parameter.
 Using this helper the parameter can be wrapped with a new type that supports `[]` and `high`.
 
+### split
+`split` is kind of the opposite of `zip`. It works with a collection of n-tuples and splits it up into an n-tuple of sequences.
+
+```nim
+check([(1, "one"), (2, "two")] --> split() == (@[1,2], @["one","two"])
+```
 
 ### exists
 
@@ -555,21 +561,22 @@ The result type depends on the function used as last parameter.
 
 | Command       | 1st Param | in-between | Last Param | Result Type                 |
 | ------------- | --------- | ---------- | ---------- | --------------------------- |
-|all            |           |            |     +      | bool                        |
-|combinations   |   +       |    (+)     |    (+)     | coll[Combination]           |
+|all            |           |            |     +      | `bool`                      |
+|combinations   |   +       |    (+)     |    (+)     | `coll[Combination]`         |
 |exists         |           |            |     +      | bool                        |
 |filter         |   +       |     +      |     +      | part coll / zeroed array    |
-|find           |           |            |     +      | int                         |
+|find           |           |            |     +      | `int`                       |
 |flatten        |   +       |     +      |     +      | coll                        |
 |fold           |           |            |     +      | *                           |
-|foreach        |   +       |     +      |     +      | void                        |
-|index          |           |            |     +      | int                         |
-|indexedMap     |   +       |     +      |     +      | seq[(int,*)]                |
+|foreach        |   +       |     +      |     +      | `void`                      |
+|index          |           |            |     +      | `int`                       |
+|indexedMap     |   +       |     +      |     +      | `seq[(int,*)]`              |
 |createIter     |           |            |  virtual   | iterator of given type      |
-|map            |   +       |     +      |     +      | collType[*]                 |
+|map            |   +       |     +      |     +      | `collType[*]`               |
 |reduce         |           |            |     +      | *                           |
 |sub            |   +       |     +      |     +      | part coll / zeroed array    |
-|zip            |   +       |     +      |     +      | seq[(*,..,*)]               |
+|split          |           |            |     +      | `(seq[*],...seq[*])`        |
+|zip            |   +       |     +      |     +      | `seq[(*,..,*)]`             |
 |to             |           |            |   virtual  | given type                  |
 
 + *: any type depending on given function parameters
