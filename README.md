@@ -454,7 +454,7 @@ import zero_functional
 import strutils
 # filter all lines containing the word hint in the iterator
 lines("nim.cfg") --> filter("hint" in it.string) --> createIter(errorLines)
-for a in errorLines(): echo a
+errorLines() --> foreach(echo it)
 ```
 
 ## Extending zero-functional
