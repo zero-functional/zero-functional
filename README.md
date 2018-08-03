@@ -14,7 +14,7 @@ var n = zip(a, b) -->
             all(it > 4)
 ```
 
-is expanded on compile time to the equivalent of:
+is expanded on compile time - additional compile-time checks omitted - to the equivalent of:
 
 ```nim
 (proc (): auto =
@@ -151,7 +151,7 @@ proc zfInit(a: MyType): MyType =
 
 These are not exactly the functions from sequtils, they have the same naming and almost the same behavior.
 
-The macro works `-->` or `connect`. Multiple `-->` may be used or `.`.
+The macros work with `-->`, `zfun` or `connect`. Multiple `-->` may be used or `.`.
 
 ```nim
 sequence --> map(..) --> all(..)
@@ -164,7 +164,16 @@ zip(a, b, c) --> map(..).
                  all(..)
 ```
 
-You can also use
+You can also use the call with sections - with the above calls omitting the dots or arrows or with several statements applied to the same function in one section.
+```nim
+let res = sequence.zfun:
+  map:
+    f1(it)
+    f2(it)
+  all(...)
+```
+
+or as simple arguments to a function:
 
 ```nim
 connect(collection, map(..), all(..))
@@ -188,6 +197,11 @@ check(x == [2,4,6])
 ```
 Map also supports converting the type of iterator item and thus of the collection.
 
+Map is (currently) the only command supporting value definitions inside the map call that may be used instead or additionally to the `it` value in subsequent calls. Assignment to simple values or tuple assignments are possible as well.
+```nim
+let idx = rows --> map(row = it) --> index(row > someValue)
+let posCoords = coords --> map((x,y) = it) --> filter(x > 0 and y > 0)
+```
 
 ### filter
 
@@ -219,6 +233,12 @@ For `zip` in order to work properly all arguments have to support access with `[
 If those procedures are not available the macro tries to call the procedure `mkIndexable` on that parameter.
 Using this helper the parameter can be wrapped with a new type that supports `[]` and `high`.
 
+### split
+`split` is kind of the opposite of `zip`. It works with a collection of n-tuples and splits it up into an n-tuple of sequences.
+
+```nim
+check([(1, "one"), (2, "two")] --> split() == (@[1,2], @["one","two"])
+```
 
 ### exists
 
@@ -414,7 +434,7 @@ Finally, it is possible to force the result type to the type given in `to` - whi
 This method is handled differently from the others and removed internally so the command before `to` is the actual last command.
 
 When the result type is given as `seq`, `array` or `list` (the latter is mapped to `DoublyLinkedList`) then the template argument can be determined automatically.
-However, when all auto detection fails, the result type may be given explicitly here - the resulting code is also a bit more efficient.
+However, when all auto detection fails, the result type may be given explicitly here - the resulting code is also a bit more efficient for the compilation process.
 
 ```nim
 check([1,2,3]) --> to(seq) == @[1,2,3])
@@ -423,50 +443,118 @@ let l2: DoublyLinkedList[string] = l
 echo(l2)
 ```
 
-### iter
+### createIter
 
-When using `iter(name)` as last function then an iterator `name` is created and which can be used for further processing with zero-functional with only a small overhead.
+When using `createIter(name)` as last function then an iterator `name` is created which can be used for further processing with zero-functional with only a small overhead.
 Similar to `to` this is also a virtual function which is internally replaced and only used to check the output type.
+The generated iterator is inline and can not be returned from a proc or given to another proc (see [Nim: Iterators](https://nim-lang.org/docs/manual.html#iterators-and-the-for-statement-first-class-iterators)).
 
 ```nim
-# filter all lines containing the word error in the iterator
-myFileIterator --> filter("error" in it) --> iter(errorLines)
-if debug:
-  errorLines() --> echo(it) # () must be used when working with iterators
+import zero_functional
+import strutils
+# filter all lines containing the word hint in the iterator
+lines("nim.cfg") --> filter("hint" in it.string) --> createIter(errorLines)
+errorLines() --> foreach(echo it)
 ```
 
 ## Extending zero-functional
 
-*This feature is still in work and will be made simpler to work with soon.*
+*This feature is still experimental.*
 
 Extending zero-functional with own functions is probably more complicated than with other fp-libraries as the functions have to be implemented with macros producing imperative code. 
-Some good examples - 2 very basic and 2 more complicated - can be found in [test.nim: registerExtension](test.nim). In a nutshell the following needs to be done:
-Define an `enum` where all commands are added - register them using `zfCreateExtensionSeq` or `zfCreateExtension` and implement all `inline` functions accordingly.
+Some good examples - 2 very basic and 2 more complicated - can be found in [test.nim: registerExtension](test.nim) and also in the source code of [zero-functional](zero-functional.nim)
+
+Example - implement the (simple) map function:
 ```nim
-type
-  ## Sample commands that are used to extend zero-functional
-  ExtCommand = enum
-      inc, filterNot, average, intersect
-	  
-# the commands intersect, filterNot and inc result in sequences if they are the last commands in the chain
-# hence they should be specifically registered.
-zfCreateExtensionSeq(ExtCommand, @[ExtCommand.intersect, ExtCommand.filterNot, ExtCommand.inc])
+zf_inline map(f):
+  loop:
+    let it = f # create the next iterator in the loop setting it to the given parameter of the map function
 ```
 
-The `inline`-implementations should follow certain rules. 
+`zf_inline` is the actual macro that takes the created function name (here: `map`) and its parameters and a body with different sections as input.
+
+The sections directly map to their counterparts in `ExtNimNode`:
+- `pre` prepare section: initialize variables and constants 
+	- all variables that are used in other sections have to be defined here!
+- `init` variable initialization before the loop
+- `loop` the actual loop action (maps to `ext.node`)
+- `delegate` delegate to other functions (like map, filter, etc.)
+- `endLoop` added to end of the loop
+- `final` after the loop section - e.g. to set the result
+
+The above `map` definition will be translated to:
+```nim
+proc inlineMap*(ext: ExtNimNode) {.compileTime.} =
+  # do some parameter checks
+  if ext.node.len - 1 > 1:
+    zfFail("too many arguments in \'$1\', got $2 but expected only $3" %
+        [ext.node.repr, $(ext.node.len - 1), $1])
+  let f = 
+    if ext.node.len > 1:
+      adapt(ext, 1) # replace all occurences if internal iterator "it" with __it__0, __it__1, etc.
+    else: # assert that the argument 'f' is supplied
+      zfFail("missing argument \'$1\' for \'$2\'" % ["f", "map"])
+      newIntLitNode(0)
+  let nextIdent = ext.nextItNode() # create the next iterator
+  # the actual 'loop' section
+  ext.node = quote:
+    let `nextIdent` = `f` # here the `it` is replaced by the next iterator
+```
+
+The Zero-DSL `map` function does not set the `result` as opposed to the `count` or `index` definition below - hence the result type is a collection result type, which is determined automatically by the zero_functional framework.
+The `it` again is seen as keyword and the definition `let it = ...` will internally set the new iterator value which is consequently used by the next functions. In the generated macro it is replaced by the call `ext.nextItNode`.
+
+While Zero-DSL is quite powerful, not all possibilities can be handled by it when implementing a function. For instance the `foreach` implementation is done completely manually and `reduce` and other functions use the macro `zf_inline_call` which provides Zero-DSL within a manual function implementation and also registers the function name.
+The signature for creating an inline function is as in the `inlineMap` example above - each function `foo` is implemented by its `inlineFoo*(ext: ExtNimNode)` counterpart.
+
+If the Zero-DSL should fail to create an own implementation of a function then `zf_inline_dbg` instead of `zf_inline` can be used to print the created function to the console, copy it - remember to add the `*` to the name - and adapt the code.
+
+It is possible to set parameter types for the functions - for example in the `index` implementation:
+```nim
+zf_inline index(cond: bool):
+  init:
+    result = -1 # index not found
+  loop:
+    if cond:
+      return idx
+```
+The `cond: bool` definition adds additional compile time checks to the generated macros, so that when using the `index`-function with a different type than `bool` a compile error with the wrong parameter and the expected type is created.
+In this example also the `idx` variable is replaced automatically with the running index that is increment during the loop.
+
+Special variables for `zf_inline` statements are:
+- `it`: when used is the previous iterator, when defined with `let it = ` creates a new iterator
+- `idx`: the running index in the loop
+- `result`: the overall result and return type of the operation
+All other variables have to be defined in the `pre`-section, also when automatically assigned, e.g. `combinations` sets a variable `c`, but when `combinations` is used in the `delegate` section, the variable `c` has to be defined in the `pre` section of the function that calls `combinations`.
+See `intersect` or `removeDoubles` implementation in [test.nim](test.nim) as an example.
+
+The manual `inline`-implementations should follow certain rules. 
 - `ext: ExtNimNode` as parameter
 - ExtNimNode should be used when implementing the functions with some helpers:
-  - `ext.node` = the actual code being generated inside the current block
-  - `ext.initials` = the initialization code for variable definitions
-  - `ext.endLoop` = code that can be inserted at the end of the loop
-  - `ext.finals` = code after the loop - e.g. to calculate a result
-  - `ext.res` = access to the function's result
+  - `ext.node` = place here the actual code being generated inside the current block 
+	initially `ext.node` contains the current function call and its parameters (section: loop)
+  - `ext.initials` = add the initialization code for variable definitions (section: init)
+  - `ext.endLoop` = add code that can be inserted at the end of the loop (section: end)
+  - `ext.finals` = add code after the loop - e.g. to calculate a result (section: final)
+  - `ext.res` = helper: access to the function's result
   - `ext.prevItNode()` = access to the iterator generated in the previous statement or loop
   - `ext.nextItNode()` = generates a new iterator for the current block. This is the (intermediate) result of the current operation that can be used with the next function
-  - `ext.getParams()` = `seq` of all parameters to the current function
-  - `ext.replaceChainBy(...)` = helper function for more complicated commands that can be composed by existing functions
-- check of parameters / number of parameters has to be done in the implementation (e.g. by using ext.getParams())
+- check of parameters / number of parameters has to be done in the implementation 
 - use `zfFail()` if any checks fail
+- register functions that use neither `zf_inline` nor `zf_inline_call` using `zfAddFunction`
+- finally call `zfCreateExtension` after all `zf_inline...` definitions and `zfAddFunction` calls - before using the actual function implementation
+
+Example of `count` that sets a result:
+```nim
+zf_inline count():
+  init:
+    result = 0
+  loop:
+    result += 1 # add one in each loop
+```
+Functions that set a result in any section are considered final functions - no other function may follow.
+
+
 
 ## Overview Table
 
@@ -474,21 +562,22 @@ The result type depends on the function used as last parameter.
 
 | Command       | 1st Param | in-between | Last Param | Result Type                 |
 | ------------- | --------- | ---------- | ---------- | --------------------------- |
-|all            |           |            |     +      | bool                        |
-|combinations   |   +       |    (+)     |    (+)     | coll[Combination]           |
+|all            |           |            |     +      | `bool`                      |
+|combinations   |   +       |    (+)     |    (+)     | `coll[Combination]`         |
 |exists         |           |            |     +      | bool                        |
 |filter         |   +       |     +      |     +      | part coll / zeroed array    |
-|find           |           |            |     +      | int                         |
+|find           |           |            |     +      | `int`                       |
 |flatten        |   +       |     +      |     +      | coll                        |
 |fold           |           |            |     +      | *                           |
-|foreach        |   +       |     +      |     +      | void                        |
-|index          |           |            |     +      | int                         |
-|indexedMap     |   +       |     +      |     +      | seq[(int,*)]                |
-|iter           |           |            |  virtual   | iterator of given type      |
-|map            |   +       |     +      |     +      | collType[*]                 |
+|foreach        |   +       |     +      |     +      | `void`                      |
+|index          |           |            |     +      | `int`                       |
+|indexedMap     |   +       |     +      |     +      | `seq[(int,*)]`              |
+|createIter     |           |            |  virtual   | iterator of given type      |
+|map            |   +       |     +      |     +      | `collType[*]`               |
 |reduce         |           |            |     +      | *                           |
 |sub            |   +       |     +      |     +      | part coll / zeroed array    |
-|zip            |   +       |     +      |     +      | seq[(*,..,*)]               |
+|split          |           |            |     +      | `(seq[*],...seq[*])`        |
+|zip            |   +       |     +      |     +      | `seq[(*,..,*)]`             |
 |to             |           |            |   virtual  | given type                  |
 
 + *: any type depending on given function parameters
@@ -510,7 +599,7 @@ a -->> foreach(echo(it))
 
 will print during compilation:
 ```nim
-if true:
+block:
   for __it__0 in a:
     echo(__it__0)
 ```

@@ -76,112 +76,112 @@ proc g(it: int): int =
   else:
     result = it + 1
 
-type
-  ## Sample commands that are used to extend zero-functional
-  ExtCommand = enum
-      inc, filterNot, average, intersect
-
 ## Own implementation of inc(num=1) command which adds num to the iterated.
 ## This could actually easily be done using `map(it+num)` but this shows an easy example of doing an own mapping.
-proc inlineInc(ext: ExtNimNode) {.compileTime.} =
-  # iterator from the previous command in chain
-  let prevIt = ext.prevItNode()
-  # a new iterator value is created in this function
-  let it = ext.nextItNode()
-  let params = ext.getParams() # get the actual params of inc
-  if (params.len > 1):
-    zfFail("Only 1 or 0 parameters supported for 'inc' command.")
-  let addArg = if (params.len == 0): newIntLitNode(1) else: params[0] # default value: increment by 1
-  # ext.node contains the code that is injected during compilation
-  ext.node = quote:
-    let `it` = `prevIt` + `addArg`
+zf_inline inc(add=1):
+  loop: # code that is added inside the loop
+    let it = it + add # create new iterator with `let it` and use the previous iterator `it` for it. 
 
 ## Own implementation of filterNot(cond) command which is basically the opposite of filter.
 ## We try to implement it not refering to filter - just to show how an if condition is handled.
 ## The resulting generated node contains a nil statement which is used by the caller to insert
 ## the next commands in the chain.
-proc inlineFilterNot(ext: ExtNimNode) {.compileTime.} =
-  let params = ext.getParams() # parameters of filterNot(...)
-  if (params.len != 1):
-    zfFail("'filterNot' needs exactly 1 parameter!")
-  ext.node = quote:
-    if not(`params`[0]):
-      nil 
+zf_inline filterNot(condition: bool):
+  loop:
+    if not condition:
+      nil
   # the nil statement marks the position where the next commands' code will be inserted.
 
 ## Own implementation of average command which calculates the arithmetic mean of 
 ## sum / count - where count is the number of items and sum is the sum of all items.
-proc inlineAverage(ext: ExtNimNode) {.compileTime.} =
-  let resultIdent = ext.res # access to the actual `result` of the created function
-  let countIdx    = genSym(nskVar, "__count__")
-  let sum         = genSym(nskVar, "__sum__")
-  let prevIt      = ext.prevItNode() # the previous iterator
-  if (ext.getParams().len != 0):
-    zfFail("'average' does not support parameters.")
-  # set the initial counter variables to calculate the average
-  let varInit = quote:
-    `resultIdent` = 0.0 # initialize the result... or infinity maybe? (0 / 0)
-    var `countIdx` = 0
-    var `sum` = 0.0
-  ext.initials.add(varInit) # add to initial section
+zf_inline average():
+  # define used variables (and initialize the result) in the init section
+  init: 
+    result = 0.0 # initialize the result... or infinity maybe? (0 / 0)
+    var countIdx = 0
+    var sum = 0.0
   # executed for each item: increment count and calculate the sum
-  ext.node = quote:
-    `countIdx` += 1
-    `sum` += float(`prevIt`)
+  loop:
+    countIdx += 1
+    sum += float(it)
   # after the loop: calculate the result
-  let calcResult = quote:
-    if `countIdx` > 0:
-      `resultIdent` = `sum` / float(`countIdx`) 
-  ext.finals.add(calcResult)
+  final: 
+    if countIdx > 0:
+      result = sum / float(countIdx)
 
-# Own implementation of intersect command building the intersection of several collections.
-# Duplicates are not removed.
-proc inlineIntersect(ext: ExtNimNode) {.compileTime.} = 
-  # intersect from the example test case below:
-  # combinations(b,squaresPlusOne()). # combine all elements of a,b...
-  # map(c.it). # get the iterator contents of each combination (indices not relevant here)
-  # filter(it[0] == it[1] and it[0] == it[2]). # this is the trickier one
-  # map(it[0])
-  # parameters for new commands
-  let params = ext.replaceChainBy($Command.combinations, $Command.map, $Command.filter, $Command.map)
-  # parameters for current 'intersect' command: the collections to be intersected
-  let intersectParams = ext.getParams()
-  let c = newIdentNode(zfCombinationsId)
-  let it = newIdentNode(zfIteratorVariableName)
-  let mapParams = quote:
-    `c`.it
-  # build the it[0] == it[1] and ... chain
-  var chain: seq[NimNode] = @[]
-  for idx in (1..intersectParams.len):
-    # it[0] == it[idx]
-    let eqExpr = infix(nnkBracketExpr.newTree(it, newIntLitNode(0)), "==", nnkBracketExpr.newTree(it, newIntLitNode(idx)))
-    if chain.len == 0:
-      chain.add(eqExpr)
-    else:
-      let left = chain[^1]
-      # ... and it[0] == it[idx]
-      chain[^1] = infix(left, "and", eqExpr)
-  if chain.len == 0:
-    zfFail("'intersect' needs at least 1 parameter!")
-  let mapParams2 = quote:
-    `it`[0]
-  
-  # now insert the command parameters
-  # 1. combinations(b,c,...)
-  for p in intersectParams:
-    params[0].add(p) # use all parameters of `intersect` for the `combinations` command
-  # 2. map(c.it)
-  params[1].add(mapParams)
-  # 3. filter(it[0] == it[1] and ...)
-  params[2].add(chain)
-  # 4. map(it[0])
-  params[3].add(mapParams2)
+zf_inline intersect(_):
+# intersect from the example test case below:
+#   combinations(b,squaresPlusOne()). # combine all elements of a,b...
+#   map(c.it). # get the iterator contents of each combination (indices not relevant here)
+#   filter(it[0] == it[1] and it[0] == it[2]). # this is the trickier one
+#   map(it[0])
+
+  pre:
+    let c = newIdentNode(zfCombinationsId)
+    # build the it[0] == it[1] and ... chain
+    var chain = quote: true
+    for i in (1..<ext.node.len):
+      # ... and it[0] == it[i]
+      chain = quote:
+        `chain` and (it[0] == it[`i`])
+
+  delegate:
+    combinations(_) # all arguments of intersect are delegated to combinations
+    map(c.it)
+    filter(chain)
+    map(it[0])
+
+zf_inline removeDoubles():
+# remove double elements. Code taken from example "remove doublettes" below
+  pre:
+    let listRef = ext.listRef
+    let c = newIdentNode(zfCombinationsId)
+  delegate:
+    # this actually only works only on th eoriginal list / iterator
+    combinations(listRef) # combine with itself - all elements
+    # this is the tricky one: remove later elements that already are in the list
+    # this actually translates in the inner for loop of combinations as:
+    # if c.idx[0] > c.idx[1] and c.it[0] == c.it[1]: break
+    takeWhile(not(c.it[0] == c.it[1] and c.idx[0] > c.idx[1])) 
+    # go back to the original elements
+    filter(c.idx[0] == c.idx[1]) 
+    map(c.it[0])
+
+proc inlineRemove*(ext: ExtNimNode) {.compileTime.} =
+  ## remove function that removes elements from a collection
+  ## two implementations - one for linked lists and one for indexable lists
+  ## remove elements when the given condition is true - default value is true (removes all (filtered) elements)
+  if ext.isListType():
+    zf_inline_call remove(cond=true):
+      pre:
+        let listRef = ext.listRef 
+        let itList = newIdentNode(zfListIteratorName)
+      init:
+        result = false
+      loop:
+        if cond:
+          listRef.remove(itList)
+        result = true
+  else:
+    zf_inline_call remove(cond=true):
+      pre:
+        let listRef = ext.listRef
+        ext.forceIndexLoop = true # delete is not supported when iterating over elements -> use index loop (seq modified while iterating over it)
+        static:
+          when not (listRef is FiniteIndexableLenIter):
+            zfFail("Only index with len types supported for remove")
+      init:
+        result = false
+      loop:
+        if cond:
+          result = true
+          listRef.delete(idx)
+          idx -= 1
 
 ## Registers the extensions for the user commands during compile time
 macro registerExtension(): untyped =
-  # the commands intersect, filterNot and inc result in sequences if they are the last commands in the chain
-  # hence they should be specifically registered.
-  zfCreateExtensionSeq(ExtCommand, @[ExtCommand.intersect, ExtCommand.filterNot, ExtCommand.inc])
+  # register all extensions that have been defined with the zf_inline macro
+  zfCreateExtension()
 
 ## Macro that checks that the expression compiles
 ## Calls "check"
@@ -328,7 +328,8 @@ suite "valid chains":
     check((zip(aArray, bArray, cArray) --> filter(it[0] > 0 and it[2] == "one")) == @[(8, 1, "one")])
 
   test "array map":
-    check((aArray --> map(it - 1)) == [1, 7, -5])
+    # map creates a new iterator hence array cannot be used as output
+    check((aArray --> map(it - 1)) == @[1, 7, -5])
 
   test "array filter":
     check((aArray --> filter(it > 2)) == [0, 8, 0])
@@ -357,7 +358,8 @@ suite "valid chains":
     check((aArray --> fold(0, a + it)) == 6)
 
   test "array map with filter":
-    check((aArray --> map(it + 2) --> filter(it mod 4 == 0)) == [4, 0, 0])
+    # map forces seq output
+    check((aArray --> map(it + 2) --> filter(it mod 4 == 0)) == @[4])
 
   test "array map with exists":
     check((aArray --> map(it + 2) --> exists(it mod 4 == 0)))
@@ -399,13 +401,13 @@ suite "valid chains":
 
   test "array filterSeq":
     check((aArray --> map(it * 2) --> filterSeq(it > 0)) == @[4, 16])
-    check((aArray --> map(it * 2) --> filter(it > 0)) == [4, 16, 0])
+    check((aArray --> map(it * 2) --> filter(it > 0)) == @[4, 16])
 
   test "array mapSeq":
     check((aArray --> map(it + 2) --> mapSeq(it * 2)) == @[8, 20, -4])
 
   test "array sub":
-    check((aArray--> sub(1)) == [0, 8, -4])
+    check((aArray --> sub(1)) == [0, 8, -4])
     check((aArray --> sub(1,1)) == [0, 8, 0])
     check((aArray --> sub(1,^2)) == [0, 8, 0])
 
@@ -464,7 +466,7 @@ suite "valid chains":
   test "generic filter":
     let p = Pack(rows: @[0,1,2,3])
     check((p --> filterSeq(it != 0)) == @[1,2,3]) 
-    check((p --> filter(it != 0)).rows ==  @[1,2,3])
+    check((p --> filter(it != 0)).rows == @[1,2,3])
     
   test "empty":
     let e : seq[int] = @[]
@@ -480,7 +482,7 @@ suite "valid chains":
     let f2 = @[@["1","2","3"],@["4","5"],@["6"]]
     check((f2 --> flatten()) == @["1","2","3","4","5","6"])
     # indexedFlatten attaches the index of the element within the sub-list - that now has been flattened
-    check(f --> indexedFlatten()            == @[(0,1),(1,2),(2,3),(0,4),(1,5),(0,6)])
+    check(f --> indexedFlatten() == @[(0,1),(1,2),(2,3),(0,4),(1,5),(0,6)])
     # this is not the same as:
     check(f --> flatten() --> map((idx,it)) == @[(0,1),(1,2),(2,3),(3,4),(4,5),(5,6)])
 
@@ -504,7 +506,7 @@ suite "valid chains":
     d.append(1)
     d.append(2)
     d.append(3)
-    let e : DoublyLinkedList[string] = (d --> map(float(it) * 2.4) --> filter(it < 6.0) --> map($it))
+    let e : DoublyLinkedList[string] = (d --> map(float(it) * 2.4) --> filter(it < 6.0) --> map($it) --> to(list))
     check((e --> map(it) --> to(seq[string])) == @["2.4", "4.8"])
     check((e --> map($it) --> to(seq)) == @["2.4", "4.8"])
     check((e --> map(it) --> to(seq)) == @["2.4", "4.8"])
@@ -535,7 +537,6 @@ suite "valid chains":
     # some things are not possible or won't compile
     let fArray = [[1,2,3], [4,5,6]]
     let fList = fArray --> map(it) --> to(list)
-    let fListFlattened = fList --> flatten() --> to(list)
     let fSeq = @[1,2,3,4,5,6]
     
     # flatten defaults to seq output if not explicitly set to the output format (except DoublyLinkedList)
@@ -546,19 +547,17 @@ suite "valid chains":
     accept((fArray --> flatten() --> to(array[6,int])) == [1,2,3,4,5,6])
     accept((fArray --> flatten() --> to(array[8,int])) == [1,2,3,4,5,6,0,0]) # if array is too big, the array is filled with default zero
 
-    reject((fList --> flatten()) == fSeq)
-    # list is flattened to list by default
-    # comparison of DoublyLinkedList does not seem to work directly...
-    accept($(fList --> flatten()) == $fListFlattened)
+    # list is flattened to seq by default
+    accept((fList --> flatten()) == fSeq)
 
   test "rejected missing add function":
     let p2 = PackWoAdd(rows: @[0,1,2,3])
     # PackWoAdd as iterable does not define the add method (or append) - hence this won't compile
-    reject((p2 --> filter(it != 0)).rows ==  @[1,2,3], 
+    reject((p2 --> filter(it != 0)).rows == @[1,2,3], 
             "Need either 'add' or 'append' implemented in 'PackWoAdd' to add elements") 
     # forced to seq -> compiles
     accept((p2 --> filter(it != 0) --> to(seq)) == @[1,2,3])
-    # also when using map which will lead to seq output
+    # also when using map will lead to seq output
     accept((p2 --> filter(it != 0) --> map($it)) == @["1","2","3"])
     accept((p2 --> filter(it != 0) --> map(it)) == @[1,2,3])
 
@@ -619,7 +618,7 @@ suite "valid chains":
     # si needs access with []
     reject(zip(si, a) --> map(it[0]+it[1]) == @[3,10,-1], 
             "need to provide an own implementation for mkIndexable(SimpleIter)") 
-    accept(si --> map((it, a[idx])) -->  map(it[0]+it[1]) == @[3,10,-1]) # this will work
+    accept(si --> map((it, a[idx])) --> map(it[0]+it[1]) == @[3,10,-1]) # this will work
     # si needs `[]` and high - we do that now...
     reject(zip(a,si) --> map(it), "need to provide an own implementation for mkIndexable(SimpleIter)") 
     proc `[]`(si: SimpleIter, idx: int) : int = si.items[idx]
@@ -639,10 +638,9 @@ suite "valid chains":
     var my_seq2 = @[1,2,3,4]
     my_seq --> foreach(it = it + 1)
     check(my_seq == @[3,4,6,8])
-    const errMsg = "Cannot change list in foreach that has already been altered with: map, indexedMap, combinations, flatten or zip!"
+    const errMsg = "Adapted list cannot be changed in-place!"
     reject(my_seq --> map(it) --> foreach(it = it + 1), errMsg)
     reject(my_seq --> indexedMap(it) --> foreach(it[1] = it[1] + 1), errMsg)
-    reject(my_seq --> combinations() --> foreach(it = it + 1), errMsg)
     reject(my_seq --> flatten() --> foreach(it = it + 1), errMsg)
     reject(zip(my_seq,my_seq2) --> foreach(it[0] = it[0] + 1), errMsg)
     check(my_seq == @[3,4,6,8])
@@ -665,9 +663,13 @@ suite "valid chains":
       x --> foreach(sum += it) 
       return sum
 
+    proc chkConversion(x: seq[int]): seq[string] =
+      result = x --> map($it)
+
     var s = @[1,2,3]
-    check(chkVar(s, 2) == @[1,3])
+    check(chkVar(s, 2) == @[1,3]) # - strangely this doesn't work any more - seems to be a problem of defining an iterator in the anonymous function in a local function (?!)
     check(chkVarFor(s) == 6)
+    check(chkConversion(s) == @["1","2","3"])
 
   test "complex type call":
     let sp = ShowPack()
@@ -675,9 +677,7 @@ suite "valid chains":
     let p2 = Pack(rows: @[2,4,6])
     let up = UsePack(packs: @[p1, p2])
     accept(up --> map(sp.show(it)) is seq[string])
-    # internally asserted, but initially a compiler problem
-    reject(up --> map(sp.show(it)) --> to(list) is DoublyLinkedList[string], 
-            "Result type 'DoublyLinkedList' and added item of type 'string' do not match!")
+    accept(up --> map(sp.show(it)) --> to(list) is DoublyLinkedList[string])
     accept(up --> map(sp.show(it)) --> to(seq) is seq[string])
     accept(up --> map(sp.show(it)) --> to(list[string]) is DoublyLinkedList[string])
     accept(up --> map(sp.show(it)) --> to(seq[string]) is seq[string])
@@ -700,11 +700,11 @@ suite "valid chains":
     let a1 = @[1,-2,3,-4,5]
     let a2 = @[1,4,-2,-3,6]
     # first zip, then multiply with each other @[1,-8,6,-12,30], then filter > 0, then sum up
-    check(zip(a1,a2) --> map(it[0]*it[1]) --> filter(it > 0) --> fold(0, a + it)         == 43)
+    check(zip(a1,a2) --> map(it[0]*it[1]) --> filter(it > 0) --> fold(0, a + it) == 43)
     # internally zip(a1,a2) --> ... is already translated to a1 --> map((a1[idx],a2[idx])) which is roughly the same as  
     check(a1 --> map((a1[idx], a2[idx])) --> map(it[0]*it[1]) --> filter(it > 0) --> fold(0, a + it) == 43)
     # this is not the same - filtering the input seq for positive values only
-    check(a1 --> filter(it > 0) --> zip(a2) --> map(it[0]*it[1]) --> fold(0, a + it)  == 25)
+    check(a1 --> filter(it > 0) --> zip(a2) --> map(it[0]*it[1]) --> fold(0, a + it) == 25)
     
     # the right hand side of zip is more flexible - you could also use expressions with `it`:
     check(a1 --> filter(it > 0).
@@ -719,14 +719,15 @@ suite "valid chains":
     check(arr --> sum() == 41)
     check(arr --> filter(it < 10) --> max() == 9)
     check(arr --> filter(it < 7) --> indexedMax() == (0,3))
+    check(arr --> filter(it < -1) --> indexedMax() == (-1,0))
     # sumIdx does not make much sense - here the index of the last added element 8 is 5, the sum is 28 
-    check(arr --> filter(it > 7) --> indexedSum()  == (5,28))
+    check(arr --> filter(it > 7) --> indexedSum() == (5,28))
     check(arr --> filter(it > 7) --> product() == 792)
   
   test "drop, take, dropWhile, takeWhile":
     # filter it > 15 => 16,17,..., sub(3) = 19,20,...
     check((11..222) --> filter(it > 15) --> sub(3,9) == @[19, 20, 21, 22, 23, 24, 25])
-    # take 2 after take 10 - is actually the same as take 2 on the whole 
+    # take 2 after take 10 - is actually the same as take 2 on the whole
     check((11..222) --> take(10) --> take(2) --> sum() == 23)
     # here the filter does actually not count
     check((11..222) --> filter(it > 4) --> take(10) == @[11, 12, 13, 14, 15, 16, 17, 18, 19, 20])
@@ -762,8 +763,7 @@ suite "valid chains":
     check(averageHeight == 160.0)
 
     (1..3) --> map(it) --> createIter(a)
-    # auto type detection is limited when working with iterator functions on the left side
-    reject(a() --> map(it))
+    check(a() --> map(it) == @[1,2,3])
     # the result type cannot be guessed automatically - so set it explicitly
     accept(a() --> to(seq[int]) == @[1,2,3])
 
@@ -800,8 +800,9 @@ suite "valid chains":
   test "register own extension":
     let a = @[1,4,3,2,5,9]
     let b = @[7,1,8,9,4]
+    let c = @[9,4,2,3]
     # the own extensions are rejected when they have not been registered yet
-    const errorMsg = " is unknown, you could provide your own implementation! See `zfCreateExtension` and `zfCreateExtensionSeq`!"
+    const errorMsg = " is unknown, you could provide your own implementation! See `zfCreateExtension`!"
     reject(a --> average() == 4.0, "average" & errorMsg)
     reject(a --> intersect(b) == @[1,4,9], "intersect" & errorMsg)
     reject(a --> inc(2) == @[3,6,5,4,7,11], "inc" & errorMsg)
@@ -814,13 +815,75 @@ suite "valid chains":
     check(a --> average() == 4.0)
     # get all elements that are both in a and b
     check(a --> intersect(b) == @[1,4,9])
+    check(a --> intersect(b,b) == @[1,4,9])
+    check(a --> intersect(b,c) == @[4,9])
+
     # increment a by 1 and by 2
-    check(a --> inc() ==  @[2,5,4,3,6,10])
+    check(a --> inc() == @[2,5,4,3,6,10])
     check(a --> inc(2) == @[3,6,5,4,7,11])
     # get all elements that are not 1 when modulo 4 is applied
     check(a --> filterNot(it mod 4 == 1) == @[4,3,2])
 
     # check own errors
-    reject(a --> filterNot(it != 0, it != 1), "'filterNot' needs exactly 1 parameter!")
-    reject(a --> inc(1,2,3), "Only 1 or 0 parameters supported for 'inc' command.")
+    reject(a --> filterNot(it != 0, it != 1), "too many arguments in 'filterNot(it != 0, it != 1)', got 2 but expected only 1")
+    reject(a --> inc(1,2,3), "too many arguments in 'inc(1, 2, 3)', got 3 but expected only 1")
     reject(a --> intersect(), "'intersect' needs at least 1 parameter!")
+
+    check(@[1,2,1,1,3,2,1,1,4] --> removeDoubles() == @[1,2,3,4])
+
+  test "zip with other list":
+    let a = @[1,2,3]
+    let b = @[4,5,6]
+    var res: seq[int] = @[]
+    reject(zip(a,b) --> foreach(it[0] = it[0] + it[1]), "Adapted list cannot be changed in-place!")
+    zip(a,b) --> foreach(res.add(it[0] + it[1]))
+    check(res == @[5,7,9])
+
+  test "reject wrong type arguments":
+    reject(a --> exists(2) == true, "Function 'exists': param 'search', expected type 'bool'!")
+    reject(a --> exists(1) == false, "Function 'exists': param 'search', expected type 'bool'!")
+    reject(a --> index(3) == -1, "Function 'index': param 'cond', expected type 'bool'!")
+    reject(a --> all(0) == false, "Function 'all': param 'test', expected type 'bool'!")
+    reject(a --> drop(true) == @[], "Function 'drop': param 'count', expected type 'int'!")
+
+  test "remove":
+    var a = @[-1,2,3,-4,5,-6]
+    var b = @[-1,2,3,-4,-5] --> to(list)
+    var c = @[-1,2,3,-4,5,-6]
+    check(a --> remove(it < 0) == true)
+    check(a == @[2,3,5])
+    check(b --> remove(it < 0) == true)
+    check(b --> to(seq) == @[2,3])
+    check(c --> filter(it < 0) --> remove() == true)
+    check(c == @[2,3,5])
+    reject(a --> remove(0) == false, "Function 'remove': param 'cond', expected type 'bool'!")
+    
+  test "define variables in map":
+    check(a --> map(item = it) --> filter(item > 0) == @[2,8])
+    check(a --> indexedMap(it) --> map((index,item) = it) --> filter(item > 0) --> map(index) == @[0,1])
+  
+  test "tuple conversion":
+    let t = (1,2,3)
+    check(t --> map(float(it)) == (1.0,2.0,3.0))
+    let (x,y) = (1,2) --> map(float(it))
+    check(x == 1.0 and y == 2.0)
+
+  test "assignment in map":
+    var cnt = 0
+    proc countFun(i: int): int =
+      cnt += 1
+      result = i
+    
+    let res = a.zfun:
+      map:
+        row = countFun(it)
+      filter:
+        row > 0
+      all:
+         row mod 2 == 0
+     
+    check(res)
+    check(cnt == a.len)
+
+  test "split":
+    check(@[(1,"one"),(2, "two"), (3, "three")] --> split() == (@[1,2,3], @["one","two","three"]))
