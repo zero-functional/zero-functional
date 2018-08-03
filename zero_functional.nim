@@ -2063,7 +2063,3 @@ macro `-->>`*(a: untyped, b: untyped): untyped =
   else:
     result = delegateMacro(a, b2, "seq", l)
 
-
-when isMainModule:
-  [1,2,3] -->> map(it+1) --> createIter(s,false)
-  s() --> foreach(echo($it))
