@@ -1748,15 +1748,42 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
   var lastCall = args.last[0].label
   let isIter = lastCall == $Command.createIter
   var iterNode: NimNode = nil
+  var isClosure = false
+  var iterName: NimNode = nil
   if isIter:
+    if args.last.len > 2:
+      let closureParam = args.last[2]
+      var closureVal: NimNode = nil
+      if closureParam.kind == nnkExprEqExpr:
+        if closureParam[0].label == "closure":
+          closureVal = closureParam[1]
+        else:
+          zfFail("Unknown parameter '$1' to 'createIter'" % [closureParam[0].label])
+      else:
+        closureVal = closureParam
+      if closureVal.label == "true":
+        isClosure = true
+      elif closureVal.label != "false":
+        zfFail("Unsupported parameter value '$1' to 'createIter'" % [closureVal.label])
     lastCall = args[args.len-2][0].label
-    let iterName = newIdentNode(args.last[1].label)
+    iterName = newIdentNode(args.last[1].label)
     args.del(args.len-1)
     if not (args.last[0].label in SEQUENCE_HANDLERS):
       zfFail("'iter' can only be used with list results - last arg is '" & args.last[0].label & "'")
-    iterNode = quote:
-      iterator `iterName`(): auto = 
-        nil
+
+    if isClosure:
+      # create closure iterator that delegates to the inline iterator
+      let inlineName = newIdentNode(iterName.label & "_inline") 
+      iterNode = quote:
+        iterator `inlineName`(): auto {.inline.} = 
+          nil
+        iterator `iterName`(): type(`inlineName`()) {.closure.} =
+          for it in `inlineName`():
+            yield it 
+    else:
+      iterNode = quote:
+        iterator `iterName`(): auto {.inline.} = 
+          nil
   
   let isSeq = lastCall in SEQUENCE_HANDLERS
   
@@ -1876,6 +1903,8 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
     code = result.last.getStmtList() 
     if isIter:
       code = result.getStmtList()
+      if isClosure:
+        code = result[0].getStmtList()
       code.add(init)
     if not isSeq:
       code.insert(0,init)
@@ -2034,3 +2063,7 @@ macro `-->>`*(a: untyped, b: untyped): untyped =
   else:
     result = delegateMacro(a, b2, "seq", l)
 
+
+when isMainModule:
+  [1,2,3] -->> map(it+1) --> createIter(s,false)
+  s() --> foreach(echo($it))
