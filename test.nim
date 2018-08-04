@@ -887,3 +887,28 @@ suite "valid chains":
 
   test "split":
     check(@[(1,"one"),(2, "two"), (3, "three")] --> split() == (@[1,2,3], @["one","two","three"]))
+
+  test "iterator":
+    a --> map($it) --> createIter(s)
+    check(s() --> to(seq) == @["2", "8", "-4"])
+    a --> map($it) --> createIter(s2, false)
+    check(s2() --> to(seq) == @["2", "8", "-4"])
+    a --> map($it) --> createIter(s3, closure=false)
+    check(s3() --> to(seq) == @["2", "8", "-4"])
+    when not defined(js):
+      proc convert(cl:iterator: int {.closure.}): seq[string] =
+        # simply writing cl() --> map($it) --> to(seq) does not work
+        # see https://github.com/nim-lang/Nim/issues/7787
+        result = @[]
+        for it in cl():
+          result.add($it)
+      # createIter with closure does not work with JS backend
+      a --> map(it) --> createIter(x, closure=true)
+      check(convert(x) == @["2", "8", "-4"])
+    else: # JS backend
+      proc convert(cl: proc: Iterable[int]): seq[string] =
+        result = @[]
+        for it in cl():
+          result.add($it)
+
+    check(convert(a --> map(it) --> to(iter)) == @["2", "8", "-4"])
