@@ -16,7 +16,7 @@ const defaultResultType = "seq[int]" & implicitTypeSuffix
 const zfMaxTupleSize = 10
 
 # if set to true: turns on prints code generated with zf (for macros -->, zfun and connect)
-const debugAll = true
+const debugAll = false
 
 # See bug https://github.com/nim-lang/Nim/issues/7787
 const hasIteratorBug = true
