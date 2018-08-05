@@ -8,8 +8,7 @@ before_install:
   - cd csources && sh build.sh
   - cd ..
   - bin/nim c koch
-  - bin/nim -d:release c compiler/nim.nim
-  - cp compiler/nim bin/nim
+  - ./koch boot -d:release
   - export PATH=$PWD/bin:$PATH
   - cd ..
 script:
