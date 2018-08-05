@@ -908,8 +908,8 @@ suite "valid chains":
     when not defined(js):
       echo([1] -->> map(it))
       # createIter with closure does not work with JS backend
-      a --> map(it) --> createIter(x, closure=true)
-      check(convertToSeqString(x) == @["2", "8", "-4"])
+      #a --> map(it) --> createIter(x, closure=true)
+      #check(convertToSeqString(x) == @["2", "8", "-4"])
       echo([2] -->> map(it))
     else: # JS backend
       proc convertToSeqString(cl: proc: Iterable[int]): seq[string] =
