@@ -450,10 +450,11 @@ Similar to `to` this is also a virtual function which is internally replaced and
 The generated iterator is inline and can not be returned from a proc or given to another proc (see [Nim: Iterators](https://nim-lang.org/docs/manual.html#iterators-and-the-for-statement-first-class-iterators)).
 
 ```nim
-# filter all lines containing the word error in the iterator
-myFileIterator --> filter("error" in it) --> createIter(errorLines)
-if debug:
-  errorLines() --> echo(it) # () must be used when working with iterators
+import zero_functional
+import strutils
+# filter all lines containing the word hint in the iterator
+lines("nim.cfg") --> filter("hint" in it.string) --> createIter(errorLines)
+errorLines() --> foreach(echo it)
 ```
 
 ## Extending zero-functional

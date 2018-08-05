@@ -79,7 +79,7 @@ type
   Iterable*[T] = concept a
     for it in a:
       type(it) is T
-  
+
   Appendable*[T] = concept a, var b
     for it in a:
       type(it) is T
@@ -1693,13 +1693,13 @@ proc checkTo(args: NimNode, td: string): string {.compileTime.} =
   var resultType : string = nil
   if hasTo:
     args.del(args.len-1) # remove the "to" node
+    resultType = last[1].repr
     if args.len <= 1:
       # there is no argument other than "to": add default mapping function "map(it)"
       args.add(parseExpr($Command.map & "(" & zfIteratorVariableName & ")"))
     else:
-      if not (args.last[0].label in SEQUENCE_HANDLERS):
+      if (not (args.last[0].label in SEQUENCE_HANDLERS)) and resultType != "iter":
         zfFail("'to' can only be used with list results - last arg is '" & args.last[0].label & "'")
-    resultType = last[1].repr
     if resultType == "list": # list as a shortcut for DoublyLinkedList
       resultType = "DoublyLinkedList" & implicitTypeSuffix
     elif resultType.startswith("list["):
@@ -1742,49 +1742,58 @@ proc checkTo(args: NimNode, td: string): string {.compileTime.} =
 proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compileTime.} =
   let debug = debugInfo.len() > 0
   let orig = if debug: args.copyNimTree() else: nil
-  let resultType = args.checkTo(td) 
+  var resultType = args.checkTo(td) 
   let preInit = args.replaceZip() # zip is replaced with map + filter
   let hasMinHigh = preInit.len > 0
-  var lastCall = args.last[0].label
-  let isIter = lastCall == $Command.createIter
+  let lastCall = args.last[0].label
+  let toIter = resultType == "iter"
+  if toIter and defined(js):
+    resultType = nil
+  let isIter = lastCall == $Command.createIter or (toIter and not defined(js))
   var iterNode: NimNode = nil
-  var isClosure = false
+  var isClosure = toIter
   var iterName: NimNode = nil
   if isIter:
-    if args.last.len > 2:
-      let closureParam = args.last[2]
-      var closureVal: NimNode = nil
-      if closureParam.kind == nnkExprEqExpr:
-        if closureParam[0].label == "closure":
-          closureVal = closureParam[1]
+    if not toIter:
+      if args.last.len > 2:
+        # parse 2nd argument of createIter (only "closure" allowed here)
+        let closureParam = args.last[2]
+        var closureVal: NimNode = nil
+        if closureParam.kind == nnkExprEqExpr:
+          if closureParam[0].label == "closure":
+            closureVal = closureParam[1]
+          else:
+            zfFail("Unknown parameter '$1' to 'createIter'" % [closureParam[0].label])
         else:
-          zfFail("Unknown parameter '$1' to 'createIter'" % [closureParam[0].label])
-      else:
-        closureVal = closureParam
-      if closureVal.label == "true":
-        isClosure = true
-      elif closureVal.label != "false":
-        zfFail("Unsupported parameter value '$1' to 'createIter'" % [closureVal.label])
-    lastCall = args[args.len-2][0].label
-    iterName = newIdentNode(args.last[1].label)
-    args.del(args.len-1)
-    if not (args.last[0].label in SEQUENCE_HANDLERS):
+          closureVal = closureParam
+        if closureVal.label == "true":
+          when not defined(js): # closure not supported by JS backend
+            isClosure = true
+          else:
+            warning("closure not supported by JS backend")
+        elif closureVal.label != "false":
+          zfFail("Unsupported parameter value '$1' to 'createIter'" % [closureVal.label])
+      iterName = newIdentNode(args.last[1].label)    
+      args.del(args.len-1)
+    else:
+      iterName = newIdentNode(zfInternalIteratorName)
+    if args.last.len > 0 and not (args.last[0].label in SEQUENCE_HANDLERS):
       zfFail("'iter' can only be used with list results - last arg is '" & args.last[0].label & "'")
 
     if isClosure:
       # create closure iterator that delegates to the inline iterator
-      let inlineName = newIdentNode(iterName.label & "_inline") 
+      let inlineName = newIdentNode(iterName.label & "_inline")
+      let it = newIdentNode("it")
       iterNode = quote:
         iterator `inlineName`(): auto {.inline.} = 
           nil
         iterator `iterName`(): type(`inlineName`()) {.closure.} =
-          for it in `inlineName`():
-            yield it 
+          for `it` in `inlineName`():
+            yield `it` 
     else:
       iterNode = quote:
         iterator `iterName`(): auto {.inline.} = 
           nil
-  
   let isSeq = lastCall in SEQUENCE_HANDLERS
   
   var defineIdxVar = (not hasMinHigh and not isIter and not td.startswith("Option[")) and (isSeq and hasIteratorBug) 
@@ -1898,19 +1907,35 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
     
   let needsFunction = (lastCall != $Command.foreach)
   if needsFunction:
-    let theProc = if isIter: iterNode else: ext.createAutoProc(args, isSeq, resultType, td, init, index > 1, isIter)
+    var theProc: NimNode = nil
+    if isIter:      
+      if toIter: # used with to(iter)
+        idents(resultIdent("result"))
+        theProc = quote:
+          (proc(): auto =
+            `iterNode`
+            `resultIdent` = `iterName`)
+      else:
+        theProc = iterNode # used with createIter(name)
+    else:
+      theProc = ext.createAutoProc(args, isSeq, resultType, td, init, index > 1, false)
     result = theProc
     code = result.last.getStmtList() 
     if isIter:
       code = result.getStmtList()
       if isClosure:
-        code = result[0].getStmtList()
+        if toIter:
+          code = result.findNode(nnkIteratorDef).getStmtList()
+        else:
+          code = result[0].getStmtList()
       code.add(init)
-    if not isSeq:
+    elif not isSeq:
       code.insert(0,init)
     if preInit.len > 0:
       code.insert(0, preInit)
-    if not isIter:
+    if ((not isIter) or toIter) and (not defined(js) or not toIter):
+      # kind of a hack: with JS backend and toIter we do not add additioal brackets to the call 
+      # here a seq is returned, but is used later the same way iterators would: with additional brackets
       result = nnkCall.newTree(result)
   else:
     # there is no extra function, but at least we have an own section here - preventing double definitions
