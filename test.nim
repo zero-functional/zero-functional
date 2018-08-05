@@ -897,7 +897,7 @@ suite "valid chains":
     check(s2() --> to(seq) == @["2", "8", "-4"])
     a --> map($it) --> createIter(s3, closure=false)
     check(s3() --> to(seq) == @["2", "8", "-4"])
-    when false: # the code actually works, but not with travis-ci - see https://github.com/nim-lang/Nim/issues/8538
+    when true: # the code actually works - but only with newest devel nim compiler built with koch
       when not defined(js):
         # createIter with closure does not work with JS backend
         proc convertToSeqString(cl:iterator: int {.closure.}): seq[string] =
