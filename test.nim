@@ -898,7 +898,7 @@ suite "valid chains":
     check(s2() --> to(seq) == @["2", "8", "-4"])
     a --> map($it) --> createIter(s3, closure=false)
     check(s3() --> to(seq) == @["2", "8", "-4"])
-    when not defined(js):
+    when not defined(js) and false:
       proc convert(cl:iterator: int {.closure.}): seq[string] =
         # simply writing cl() --> map($it) --> to(seq) does not work
         # see https://github.com/nim-lang/Nim/issues/7787
