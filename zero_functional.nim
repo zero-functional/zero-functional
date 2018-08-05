@@ -1794,6 +1794,7 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
       iterNode = quote:
         iterator `iterName`(): auto {.inline.} = 
           nil
+
   let isSeq = lastCall in SEQUENCE_HANDLERS
   
   var defineIdxVar = (not hasMinHigh and not isIter and not td.startswith("Option[")) and (isSeq and hasIteratorBug) 
