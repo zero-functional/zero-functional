@@ -13,3 +13,5 @@ before_install:
   - cd ..
 script:
 - nim c --run test.nim
+- nim js --run test.nim
+
