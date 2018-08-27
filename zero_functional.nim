@@ -683,7 +683,7 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
           if `i` < `ext`.node.len:
             adapt(`ext`, `i`)
           else:
-            when `hasDefault`:
+            when bool(`hasDefault`):
               quote:
                 `defaultVal`
             else:
