@@ -496,7 +496,7 @@ macro zfAddItemChk*(resultIdent: untyped, idxIdent: untyped, addItem: untyped, t
       zfAddItem(`resultIdent`, `idxIdent`, `addItem`)
     else:
       static:
-        when (`resultType` == nil or `resultType` == ""):
+        when (`resultType`.len == 0):
           zfFail("Need either 'add' or 'append' implemented in '" & `typedescr` & "' to add elements")
         else:
           zfFail("Result type '" & `resultType` & "' and added item of type '" & $`addItem`.type & "' do not match!")
