@@ -621,11 +621,11 @@ suite "valid chains":
   test "zip with simpleIter":
     let si = initSimpleIter()
     # si needs access with []
-    reject2(zip(si, a) --> map(it[0]+it[1]) == @[3,10,-1], 
+    reject(zip(si, a) --> map(it[0]+it[1]) == @[3,10,-1], 
             "need to provide an own implementation for mkIndexable(SimpleIter)") 
     accept(si --> map((it, a[idx])) --> map(it[0]+it[1]) == @[3,10,-1]) # this will work
     # si needs `[]` and high - we do that now...
-    reject2(zip(a,si) --> map(it), "need to provide an own implementation for mkIndexable(SimpleIter)") 
+    reject(zip(a,si) --> map(it), "need to provide an own implementation for mkIndexable(SimpleIter)") 
     proc `[]`(si: SimpleIter, idx: int) : int = si.items[idx]
     proc `high`(si: SimpleIter) : int = si.items.high()
     check(zip(a,si) --> map(it[0]+it[1]) == @[3,10,-1])
