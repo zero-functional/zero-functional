@@ -17,6 +17,9 @@ const zfMaxTupleSize = 10
 # if set to true: turns on prints code generated with zf (for macros -->, zfun and connect)
 const debugAll = false
 
+# if set to true:  convert to result type (if possible) - e.g.: convert input seq[uint8] to output seq[int] 
+const autoConvert = true
+
 # See bug https://github.com/nim-lang/Nim/issues/7787
 const hasIteratorBug = true
 const createProc = hasIteratorBug
@@ -339,6 +342,10 @@ proc zfAddItem*[T](a: var HashSet[T], idx: int, item: T) =
   discard(idx)
   a.incl(item)
 
+## Add item to seq, but converting from type U to T by explicit cast
+proc zfAddItemConvert*[T, U](a: var Iterable[T], idx: int, item: U) =
+  zfAddItem(a, idx, T(item))
+
 ## Special implementations for tuple code (max `zfMaxTupleSize` items)
 ## The macro generates the zfAddItem[T] procs.
 ## For a tuple of size 2 that looks like:
@@ -503,6 +510,8 @@ macro zfAddItemChk*(resultIdent: untyped, idxIdent: untyped, addItem: untyped, t
   result = quote:
     when compiles(zfAddItem(`resultIdent`, `idxIdent`, `addItem`)):
       zfAddItem(`resultIdent`, `idxIdent`, `addItem`)
+    elif autoConvert and compiles(zfAddItemConvert(`resultIdent`, `idxIdent`, `addItem`)):
+      zfAddItemConvert(`resultIdent`, `idxIdent`, `addItem`)
     else:
       static:
         when (`resultType`.len == 0):
@@ -1672,7 +1681,12 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool, resultType: str
       if createProc and hasIter:
         let yield2 = loopDef.findNode(nnkYieldStmt)
         if yield2 != nil:
-          let ret2 = nnkReturnStmt.newTree(yield2[0])
+          # replace yield expression in proc with a result expression
+          # the created proc is used later on only to determine the result type - not to actually call the proc
+          let resultIdent = newIdentNode("result")
+          let yieldResult = yield2[0]
+          let ret2 = quote:
+            `resultIdent` = `yieldResult`
           discard loopDef.replace(yield2, ret2)
     else:
       let it = newIdentNode(internalIteratorName)
@@ -2038,20 +2052,34 @@ proc delegateMacro(a: NimNode, b1:NimNode, td: string, debugInfo: string): NimNo
 macro delegateArrow(td: typedesc, a: untyped, b: untyped, debugInfo: untyped): untyped =
   result = delegateMacro(a, b, getTypeInfo(td.getType[1], td.getTypeInst[1]), debugInfo.repr[1..^2])
 
-## The arrow "-->" should not be part of the left-side argument a.
-proc checkArrow(a: NimNode, b: NimNode, arrow: string): (NimNode, NimNode, bool) =
-  var b = b
-  if a.kind == nnkInfix:
-    let ar = a.repr
-    let idx = ar.find(arrow)
-    if idx != -1:
-      # also replace the arrows with "."
-      let debug = ar[idx+arrow.len] == '>' # debug arrow -->> is used
-      let add = if debug: 1 else: 0
-      let br = (ar[idx+arrow.len+add..ar.len-1] & "." & b.repr).replace(arrow, ".")
-      return (parseExpr(ar[0..idx-1]), parseExpr(br), debug)
-  result = (a,b,false)
+proc replArrow(n: NimNode, arrow: string): NimNode =
+  if n.kind == nnkInfix and n[0].label == arrow:
+    result = nnkDotExpr.newTree(n[1], n[2])
+  else:
+    result = n
+    if n.kind != nnkCall:
+      for i in 0..n.len-1:
+        n[i] = n[i].replArrow(arrow)
 
+proc getOp(a: NimNode): string = 
+  if a.kind == nnkInfix:
+    return a[0].repr
+  return ""  
+
+proc checkArrow(a: NimNode, b: NimNode, debug: bool = false): (NimNode, NimNode, bool) =
+  result = (a,b,debug)
+  let op = a.getOp()
+  if op == "-->" or op == "-->>":
+    # also replace the arrows with "."
+    let br = nnkDotExpr.newTree(a[2], b.replArrow(op))
+    # ensure to use the left-most arrow
+    let op2 = a[1].getOp()
+    if op2 == "-->" or op2 == "-->>":
+      return checkArrow(a[1], br, op2 == "-->>")
+    # this is kind of inefficient - but using br directly does not work here
+    # probably the tree is unbalanced somehow
+    return (a[1], parseExpr(br.repr), op == "-->>")
+  
 ## Alternative call with comma separated arguments.
 macro connect*(args: varargs[untyped]): untyped =
   result = quote:
@@ -2077,7 +2105,7 @@ macro zfunDbg*(a: untyped, b: untyped): untyped =
 
 ## general macro to invoke all available zero_functional functions
 macro `-->`*(a: untyped, b: untyped): untyped =
-  let (a,b2,debug) = checkArrow(a,b,"-->")
+  let (a,b2,debug) = checkArrow(a,b)
   let l = b.dbgLineInfo(debug or debugAll)
   if a.label != $Command.zip:
     if not debug: # using debug (or `debug`) directly does not work (?!)
@@ -2091,10 +2119,11 @@ macro `-->`*(a: untyped, b: untyped): untyped =
 
 ## use this macro for debugging - will output the created code
 macro `-->>`*(a: untyped, b: untyped): untyped =
-  let (a,b2,_) = checkArrow(a,b,"-->")
+  let (a,b2,_) = checkArrow(a,b)
   let l = b2.dbgLineInfo(true)
   if a.label != $Command.zip:
     result = quote:
       delegateArrow(type(`a`), `a`, `b2`, `l`)
   else:
     result = delegateMacro(a, b2, "seq", l)
+ 

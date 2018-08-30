@@ -918,3 +918,10 @@ suite "valid chains":
           for it in cl():
             result.add($it)
       check(convertToSeqString(a --> map(it) --> to(iter)) == @["2", "8", "-4"])
+
+  test "convert uint to int results":
+    let au = @[1u8, 2u8, 3u8]
+    check(au --> to(seq[int]) == @[1,2,3])
+
+    let bu = @[@[1u8, 2u8], @[3u8]]
+    check(bu --> map(it --> to(seq[int])) --> to(seq[seq[int]]) == @[@[1,2], @[3]])
