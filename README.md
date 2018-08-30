@@ -1,6 +1,6 @@
 # zero-functional
 
-[![Build Status](https://travis-ci.org/alehander42/zero-functional.svg?branch=master)](https://travis-ci.org/alehander42/zero-functional)
+[![Build Status](https://travis-ci.org/zero-functional/zero-functional.svg?branch=master)](https://travis-ci.org/zero-functional/zero-functional)
 
 A library providing (almost) zero-cost chaining for functional abstractions in Nim.
 
@@ -445,9 +445,11 @@ echo(l2)
 
 ### createIter
 
-When using `createIter(name)` as last function then an iterator `name` is created which can be used for further processing with zero-functional with only a small overhead.
+When using `createIter(name:string,closure:bool=false)` as last function then an iterator `name` is created which can be used for further processing with zero-functional with only a small overhead.
 Similar to `to` this is also a virtual function which is internally replaced and only used to check the output type.
-The generated iterator is inline and can not be returned from a proc or given to another proc (see [Nim: Iterators](https://nim-lang.org/docs/manual.html#iterators-and-the-for-statement-first-class-iterators)).
+The generated iterator is inline by default and can not be returned from a proc or given to another proc (see [Nim: Iterators](https://nim-lang.org/docs/manual.html#iterators-and-the-for-statement-first-class-iterators)).
+
+To create a closure iterator, the optional argument `closure` has to be set to `true`. A closure iterator is created which can be used as a return result from a procedure or as a parameter to a procedure. *This does not work with JS backend!*
 
 ```nim
 import zero_functional
@@ -607,6 +609,11 @@ block:
 The printed code can be copied to your actual program for further investigation.
 Remember to remove the dunder (double-underscores) of the generated variables before compiling the generated code and watch out for name-clashes with your own code.
 
+## Compile flags
+
+The following compile flags are supported:
+* -d:zf_iter defaults to generating closure iterators instead of `seq` outputs.
+* -d:zf_list same as above but generating `DoublyLinkedList`
 
 ### LICENSE
 
