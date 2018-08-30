@@ -12,7 +12,6 @@ const internalIteratorName = "__" & zfIteratorVariableName & "__"
 const useInternalAccu = zfAccuVariableName != "result"
 const internalAccuName = if (useInternalAccu): "__" & zfAccuVariableName & "__" else: "result"
 const implicitTypeSuffix = "?" # used when result type is automatically determined
-const defaultResultType = "seq[int]" & implicitTypeSuffix
 const zfMaxTupleSize = 10
 
 # if set to true: turns on prints code generated with zf (for macros -->, zfun and connect)
@@ -21,6 +20,16 @@ const debugAll = false
 # See bug https://github.com/nim-lang/Nim/issues/7787
 const hasIteratorBug = true
 const createProc = hasIteratorBug
+
+when defined(zf_iter):
+  const defaultCollectionType = ""
+  const defaultResultType = "iter"
+else:
+  when defined(zf_list):
+    const defaultCollectionType = "DoublyLinkedList"
+  else:
+    const defaultCollectionType = "seq"
+  const defaultResultType = defaultCollectionType & "[int]" & implicitTypeSuffix
 
 type
 
@@ -1638,8 +1647,9 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool, resultType: str
         `init`
 
     elif forceSeq and hasIter:
+      let coll = newIdentNode(defaultCollectionType)
       code = quote:
-        var res: seq[iteratorType(`itDef`)]
+        var res: `coll`[iteratorType(`itDef`)]
         `resultIdent` = zfInit(res)
     else:
       # use the same type as in the original list
@@ -1709,7 +1719,7 @@ proc checkTo(args: NimNode, td: string): string {.compileTime.} =
     elif resultType.startswith("set["):
       resultType = "HashSet" & resultType[3..resultType.len-1]
     elif resultType == "seq":
-      resultType = defaultResultType
+      resultType = "seq[int]" & implicitTypeSuffix
   if resultType.len == 0:
     for arg in args:
       if arg.kind == nnkCall:
@@ -1746,7 +1756,7 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
   let preInit = args.replaceZip() # zip is replaced with map + filter
   let hasMinHigh = preInit.len > 0
   let lastCall = args.last[0].label
-  let toIter = resultType == "iter"
+  let toIter = resultType == "iter" or (resultType.len == 0 and defined(zf_iter))
   if toIter and defined(js):
     resultType = ""
   let isIter = lastCall == $Command.createIter or (toIter and not defined(js))
