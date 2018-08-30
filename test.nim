@@ -209,13 +209,16 @@ macro checkRejectMsg(e: untyped, msg: static[string], cmp: static[string]) : unt
 ## Checks that the given expression is rejected by the compiler.
 ## When an assert (with msg) happens: the msg has to be the same.
 template reject*(e: untyped, msg: static[string] = "") =
-  # checking compiles(e) currently does not work any more with nim!
+  static: # [sic!] - need several static sections here [why?!]
+    when (compiles(e)):
+      compilesMsg(e)
+  static:
+    checkRejectMsg(e, msg, zfGetLastFailure())
+  discard
 
-  #static: # [sic!] - need several static sections here [why?!]
-  #  when (compiles(e)):
-  #    compilesMsg(e)
-  #static:
-  #  checkRejectMsg(e, msg, zfGetLastFailure())
+template reject2*(e: untyped, msg: static[string] = "") =
+  # checking compiles(e) currently does not always work with nim!
+  # so reject(...) cannot be used under some circumstances
   discard
 
     
@@ -612,17 +615,17 @@ suite "valid chains":
     accept(d --> to(seq) == @[2,4,6])
 
     reject(zip(si,si2) --> map($it) != nil, "need to provide an own implementation for mkIndexable(SimpleIter)") # zip also needs the [] operator
-    reject(si --> combinations() --> all(c.it[0] < c.it[1]), "Only index with len types supported for combinations")
+    reject2(si --> combinations() --> all(c.it[0] < c.it[1]), "Only index with len types supported for combinations")
     accept(d --> combinations() --> map(c.it) --> all(it[0] < it[1]))
 
   test "zip with simpleIter":
     let si = initSimpleIter()
     # si needs access with []
-    reject(zip(si, a) --> map(it[0]+it[1]) == @[3,10,-1], 
+    reject2(zip(si, a) --> map(it[0]+it[1]) == @[3,10,-1], 
             "need to provide an own implementation for mkIndexable(SimpleIter)") 
     accept(si --> map((it, a[idx])) --> map(it[0]+it[1]) == @[3,10,-1]) # this will work
     # si needs `[]` and high - we do that now...
-    reject(zip(a,si) --> map(it), "need to provide an own implementation for mkIndexable(SimpleIter)") 
+    reject2(zip(a,si) --> map(it), "need to provide an own implementation for mkIndexable(SimpleIter)") 
     proc `[]`(si: SimpleIter, idx: int) : int = si.items[idx]
     proc `high`(si: SimpleIter) : int = si.items.high()
     check(zip(a,si) --> map(it[0]+it[1]) == @[3,10,-1])
@@ -650,9 +653,10 @@ suite "valid chains":
 
   test "closure parameters":
     # x is an illegal capture - so this will be rejected
-    reject:
-      proc chkVarError(x: var seq[int], y: int): seq[int] =
-        result = x --> filter(it != y) 
+    when not defined(js):
+      reject:
+        proc chkVarError(x: var seq[int], y: int): seq[int] =
+          result = x --> filter(it != y) 
 
     proc chkVar(x: var seq[int], y: int): seq[int] =
       let x = x # assigning x to a constant will work
