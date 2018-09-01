@@ -11,14 +11,10 @@ const zfInternalIteratorName* = "__autoIter__"
 const internalIteratorName = "__" & zfIteratorVariableName & "__"
 const useInternalAccu = zfAccuVariableName != "result"
 const internalAccuName = if (useInternalAccu): "__" & zfAccuVariableName & "__" else: "result"
-const implicitTypeSuffix = "?" # used when result type is automatically determined
 const zfMaxTupleSize = 10
 
 # if set to true: turns on prints code generated with zf (for macros -->, zfun and connect)
 const debugAll = false
-
-# if set to true:  convert to result type (if possible) - e.g.: convert input seq[uint8] to output seq[int] 
-const autoConvert = true
 
 # See bug https://github.com/nim-lang/Nim/issues/7787
 const hasIteratorBug = true
@@ -32,7 +28,7 @@ else:
     const defaultCollectionType = "DoublyLinkedList"
   else:
     const defaultCollectionType = "seq"
-  const defaultResultType = defaultCollectionType & "[int]" & implicitTypeSuffix
+  const defaultResultType = defaultCollectionType & "[int]"
 
 type
 
@@ -46,6 +42,11 @@ type
     ## additional commands that operate as reduce command
     max, min, product, sum
 
+  ResultType = object
+    id: string ## the result type to create
+    implicit: bool ## set to true when the user did not give an explicit type
+    autoConvert: bool ## set to true when the second parameter of `to` is true - then the conversion (e.g. between numeric types) is tried automatically
+
   ExtNimNode* = ref object ## Store additional info the current NimNode used in the inline... functions
     node*: NimNode     ## the current working node / the current function
     nodeIndex: int     ## the position in args of the current working node
@@ -58,7 +59,7 @@ type
     listRef*:  NimNode ## reference to the list the iterator is working on
     args: NimNode      ## all arguments to the original macro
     typeDescription: string ## type description of the outer list type
-    resultType: string ## result type when explicitly set
+    resultType: ResultType ## result type when explicitly set
     needsIndex*: bool  ## true if the idx-variable is needed
     hasMinHigh: bool   ## true if the minHigh variable is defined and the loop should use indices rather than iterator
     isIter: bool       ## true if an iterator shall be created
@@ -506,12 +507,16 @@ proc addElem*(ext: ExtNimNode, addItem: NimNode): NimNode {.compileTime.} =
   else:
     result = nil
 
-macro zfAddItemChk*(resultIdent: untyped, idxIdent: untyped, addItem: untyped, typedescr: static[string], resultType: static[string]): untyped =
+macro zfAddItemChk*(resultIdent: untyped, idxIdent: untyped, addItem: untyped, typedescr: static[string], resultType: static[string], autoConvert: static[int]): untyped =
   result = quote:
     when compiles(zfAddItem(`resultIdent`, `idxIdent`, `addItem`)):
       zfAddItem(`resultIdent`, `idxIdent`, `addItem`)
-    elif autoConvert and compiles(zfAddItemConvert(`resultIdent`, `idxIdent`, `addItem`)):
+    elif compiles(zfAddItemConvert(`resultIdent`, `idxIdent`, `addItem`)):
       zfAddItemConvert(`resultIdent`, `idxIdent`, `addItem`)
+      static:
+        if `autoConvert` == 0:
+          warning("Type " & $`addItem`.type & " was automatically converted to " & $`resultType` &
+                  "\nTo remove this warning either set second parameter of `to` to true or adapt the result type.")
     else:
       static:
         when (`resultType`.len == 0):
@@ -523,11 +528,12 @@ proc addElemResult(ext: ExtNimNode, addItem: NimNode): NimNode {.compileTime.} =
   let resultIdent = ext.res
   # use -1 to force an error in case the index was actually needed instead of silently doing the wrong thing
   let idxIdent = if ext.needsIndex: newIdentNode(zfIndexVariableName) else: newIntLitNode(-1)
-  let resultType = ext.resultType
+  let resultType = ext.resultType.id
+  let autoConvert = if ext.resultType.autoConvert: 1 else: 0 
   let typedescr = ext.typeDescription
 
   result = quote:
-    zfAddItemChk(`resultIdent`, `idxIdent`, `addItem`, `typedescr`, `resultType`)
+    zfAddItemChk(`resultIdent`, `idxIdent`, `addItem`, `typedescr`, `resultType`, `autoConvert`)
 
 ## Helper for Zero-DSL: quote all used variables that are defined somewhere in the created function.
 proc addQuotes(a: NimNode, quotedVars: Table[string,string]) =
@@ -1521,29 +1527,26 @@ proc replaceZip(args: NimNode) : NimNode {.compileTime.} =
 ## Gets the result type, depending on the input-result type and the type-description of the input type.
 ## When the result type was given explicitly by the user that type is used.
 ## Otherwise the template argument is determined by the input type.
-proc getResType(resultType: string, td: string): (NimNode, bool) {.compileTime.} =
-  if resultType.len == 0:
+proc getResType(resultType: ResultType, td: string): (NimNode, bool) {.compileTime.} =
+  if resultType.id.len == 0:
     return (nil, false)
   var resType = resultType
-  let explicitType = not resultType.endswith(implicitTypeSuffix)
-  if not explicitType:
-    resType = resType[0..resType.len-1-implicitTypeSuffix.len]
 
-  let idx = resType.find("[")
+  let idx = resType.id.find("[")
   if idx != -1:
-    result = (parseExpr(resType), explicitType)
+    result = (parseExpr(resType.id), not resultType.implicit)
   else:
-    let res = newIdentNode(resType)
+    let res = newIdentNode(resType.id)
     let idx2 = td.find("[")
     var q : NimNode
     if idx2 != -1:
       var tdarg = td[idx2+1..td.len-2]
       let idxComma = tdarg.find(", ")
       let idxBracket = tdarg.find("[")
-      if idxComma != -1 and (idxBracket == -1 or idxBracket > idxComma) and resType != "array":
+      if idxComma != -1 and (idxBracket == -1 or idxBracket > idxComma) and resType.id != "array":
         # e.g. array[0..2,...] -> seq[...]
         tdarg = tdarg[idxComma+2..tdarg.len-1]
-      q = parseExpr(resType & "[" & tdarg & "]")
+      q = parseExpr(resType.id & "[" & tdarg & "]")
     else:
       q = quote:
         `res`[int] # this is actually a dummy type
@@ -1586,7 +1589,7 @@ proc createIteratorFunction(args: NimNode): NimNode =
 
 ## Creates the function that returns the final result of all combined commands.
 ## The result type depends on map, zip or flatten calls. It may be set by the user explicitly using to(...)
-proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool, resultType: string, td: string, loopDef: NimNode, forceSeq: bool, isIter: bool): NimNode =
+proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool, resultType: ResultType, td: string, loopDef: NimNode, forceSeq: bool, isIter: bool): NimNode =
   var (resType, explicitType) = getResType(resultType, td)
   var collType = if resType != nil: resType.repr else: td
 
@@ -1628,7 +1631,7 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool, resultType: str
 
     let i = collType.find("[")
     let isTuple = collType.startswith("(") and collType.endswith(")")
-    if not isTuple and (i != -1 and hasIter and (not forceSeq or resultType.len > 0)):
+    if not isTuple and (i != -1 and hasIter and (not forceSeq or resultType.id.len > 0)):
       collType = collType[0..i-1]
       let collSym = parseExpr(collType)
       let resDef =
@@ -1711,30 +1714,34 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool, resultType: str
 
 ## Check if the "to" parameter is used to generate a specific result type.
 ## The requested result type is returned and the "to"-node is removed.
-proc checkTo(args: NimNode, td: string): string {.compileTime.} =
+proc checkTo(args: NimNode, td: string): ResultType {.compileTime.} =
   let last = args.last
   let hasTo = last.kind == nnkCall and last[0].repr == $Command.to
-  var resultType : string = ""
+  let autoConvert = hasTo and last.len == 3 and (last[2].label == "true" or (last[2].kind == nnkExprEqExpr and last[2][1].label == "true"))
+  result = ResultType(id: "", implicit: false, autoConvert: autoConvert)
   if hasTo:
     args.del(args.len-1) # remove the "to" node
-    resultType = last[1].repr
+    result.id = last[1].repr
     if args.len <= 1:
       # there is no argument other than "to": add default mapping function "map(it)"
       args.add(parseExpr($Command.map & "(" & zfIteratorVariableName & ")"))
     else:
-      if (not (args.last[0].label in SEQUENCE_HANDLERS)) and resultType != "iter":
+      if (not (args.last[0].label in SEQUENCE_HANDLERS)) and result.id != "iter":
         zfFail("'to' can only be used with list results - last arg is '" & args.last[0].label & "'")
-    if resultType == "list": # list as a shortcut for DoublyLinkedList
-      resultType = "DoublyLinkedList" & implicitTypeSuffix
-    elif resultType.startswith("list["):
-      resultType = "DoublyLinkedList" & resultType[4..resultType.len-1]
-    elif resultType == "set": # set as a shortcut for HashSet
-      resultType = "HashSet" & implicitTypeSuffix
-    elif resultType.startswith("set["):
-      resultType = "HashSet" & resultType[3..resultType.len-1]
-    elif resultType == "seq":
-      resultType = "seq[int]" & implicitTypeSuffix
-  if resultType.len == 0:
+    if result.id == "list": # list as a shortcut for DoublyLinkedList
+      result.id = "DoublyLinkedList"
+      result.implicit = true
+    elif result.id.startswith("list["):
+      result.id = "DoublyLinkedList" & result.id[4..result.id.len-1]
+    elif result.id == "set": # set as a shortcut for HashSet
+      result.id = "HashSet"
+      result.implicit = true
+    elif result.id.startswith("set["):
+      result.id = "HashSet" & result.id[3..result.id.len-1]
+    elif result.id == "seq":
+      result.id = "seq[int]"
+      result.implicit = true
+  if result.id.len == 0:
     for arg in args:
       if arg.kind == nnkCall:
         let label = arg[0].repr
@@ -1748,20 +1755,21 @@ proc checkTo(args: NimNode, td: string): string {.compileTime.} =
             arg[0] = newIdentNode(label[0..label.len-4])
           elif isList:
             arg[0] = newIdentNode(label[0..label.len-5])
-          if isSeq or isList or resultType.len == 0:
-            resultType =
+          if isSeq or isList or result.id.len == 0:
               if isSeq:
-                "seq"
+                result.id = "seq"
               elif isList:
-                "DoublyLinkedList"
+                result.id = "DoublyLinkedList"
               elif (td.startswith("DoublyLinkedList")):
-                td & implicitTypeSuffix
+                result.id = td
+                result.implicit = true
               else:
-                defaultResultType # default to sequence - and use it if isSeq is used explicitly
-  if resultType.len == 0 and td == "enum":
-    resultType = "seq[" & $args[0] & "]" & implicitTypeSuffix
-  result = resultType
-
+                result.id = defaultResultType # default to sequence - and use it if isSeq is used explicitly
+                result.implicit = true
+  if result.id.len == 0 and td == "enum":
+    result.id = "seq[" & $args[0] & "]"
+    result.implicit = true
+  
 ## Main function that creates the outer function call.
 proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compileTime.} =
   let debug = debugInfo.len() > 0
@@ -1770,9 +1778,9 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
   let preInit = args.replaceZip() # zip is replaced with map + filter
   let hasMinHigh = preInit.len > 0
   let lastCall = args.last[0].label
-  let toIter = resultType == "iter" or (resultType.len == 0 and defined(zf_iter))
+  let toIter = resultType.id == "iter" or (resultType.id.len == 0 and defined(zf_iter))
   if toIter and defined(js):
-    resultType = ""
+    resultType.id = ""
   let isIter = lastCall == $Command.createIter or (toIter and not defined(js))
   var iterNode: NimNode = nil
   var isClosure = toIter
@@ -1824,8 +1832,8 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
   var defineIdxVar = (not hasMinHigh and not isIter and not td.startswith("Option[")) and (isSeq and hasIteratorBug)
   var needsIndexVar = false
 
-  if ((not isIter and (isSeq and (resultType.len > 0 and resultType.startswith("array") or
-      (resultType.len == 0 and td.startswith("array"))))) or
+  if ((not isIter and (isSeq and (resultType.id.len > 0 and resultType.id.startswith("array") or
+      (resultType.id.len == 0 and td.startswith("array"))))) or
       args.findNode(nnkIdent, zfIndexVariableName) != nil):
       needsIndexVar = true
 
@@ -2126,4 +2134,3 @@ macro `-->>`*(a: untyped, b: untyped): untyped =
       delegateArrow(type(`a`), `a`, `b2`, `l`)
   else:
     result = delegateMacro(a, b2, "seq", l)
- 
