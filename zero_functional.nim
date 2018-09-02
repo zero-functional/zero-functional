@@ -507,6 +507,8 @@ proc addElem*(ext: ExtNimNode, addItem: NimNode): NimNode {.compileTime.} =
   else:
     result = nil
 
+# TODO `autoConvert` should be static[bool] - but currently this does not work - use bool when bug has been fixed. 
+# see bug https://github.com/nim-lang/Nim/issues/7375
 macro zfAddItemChk*(resultIdent: untyped, idxIdent: untyped, addItem: untyped, typedescr: static[string], resultType: static[string], autoConvert: static[int]): untyped =
   result = quote:
     when compiles(zfAddItem(`resultIdent`, `idxIdent`, `addItem`)):
@@ -529,7 +531,7 @@ proc addElemResult(ext: ExtNimNode, addItem: NimNode): NimNode {.compileTime.} =
   # use -1 to force an error in case the index was actually needed instead of silently doing the wrong thing
   let idxIdent = if ext.needsIndex: newIdentNode(zfIndexVariableName) else: newIntLitNode(-1)
   let resultType = ext.resultType.id
-  let autoConvert = if ext.resultType.autoConvert: 1 else: 0 
+  let autoConvert = if ext.resultType.autoConvert: 1 else: 0 # TODO use bool (see zfAddItemCheck)
   let typedescr = ext.typeDescription
 
   result = quote:
