@@ -443,6 +443,16 @@ let l2: DoublyLinkedList[string] = l
 echo(l2)
 ```
 
+`to` supports a second parameter `autoConvert`. This actually only suppresses a warning when the actual result type and the added type are not identical but can be cast to another.
+A bit more complex example:
+```nim
+# doing a complex conversion from `seq[seq[uint8]]` to `seq[seq[int]]`
+check(@[@[1u8, 2u8], @[3u8]] --> map(it --> to(seq[int],true)) --> to(seq[seq[int]]) == @[@[1,2], @[3]])
+```
+* the `map` call itself contains a new `-->` call, i.e.: each internal list is converted from `seq[uint8]` to `seq[int]`
+* the parameter `true` is necessary to suppress a warning that the conversion is done by casting (each element)
+* the final result is a `seq[seq[int]]` - this conversion is optional (maybe to document) and can be determined automatically.
+
 ### createIter
 
 When using `createIter(name:string,closure:bool=false)` as last function then an iterator `name` is created which can be used for further processing with zero-functional with only a small overhead.
