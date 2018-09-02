@@ -1637,12 +1637,20 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool, resultType: Res
       collType = collType[0..i-1]
       let collSym = parseExpr(collType)
       let resDef =
-        if collType == "array":
-          quote:
-            array[`listRef`.len, iteratorType(`itDef`)]
-        else:
-          quote:
-            `collSym`[iteratorType(`itDef`)]
+        if createProc:
+          if collType == "array":
+            quote:
+              array[`listRef`.len, type(`itDef`())]
+          else:
+            quote:
+              `collSym`[type(`itDef`())] 
+        else: 
+          if collType == "array":
+            quote:
+              array[`listRef`.len, iteratorType(`itDef`)]
+          else:
+            quote:
+              `collSym`[iteratorType(`itDef`)]
       code = quote:
         var res: `resDef`
         `resultIdent` = zfInit(res)
@@ -1662,9 +1670,14 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool, resultType: Res
 
     elif forceSeq and hasIter:
       let coll = newIdentNode(defaultCollectionType)
-      code = quote:
-        var res: `coll`[iteratorType(`itDef`)]
-        `resultIdent` = zfInit(res)
+      if createProc:
+        code = quote:
+          var res: `coll`[type(`itDef`())]
+          `resultIdent` = zfInit(res)
+      else:
+        code = quote:
+          var res: `coll`[iteratorType(`itDef`)]
+          `resultIdent` = zfInit(res)
     else:
       # use the same type as in the original list
       code = nnkStmtList.newTree().add quote do:

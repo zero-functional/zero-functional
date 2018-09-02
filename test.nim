@@ -925,3 +925,5 @@ suite "valid chains":
 
     let bu = @[@[1u8, 2u8], @[3u8]]
     check(bu --> map(it --> to(seq[int],true)) --> to(seq[seq[int]]) == @[@[1,2], @[3]])
+    # the final conversion is not actually needed
+    check(bu --> map(it --> to(seq[int],true)) == @[@[1,2], @[3]])
