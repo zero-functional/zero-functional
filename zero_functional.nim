@@ -507,18 +507,16 @@ proc addElem*(ext: ExtNimNode, addItem: NimNode): NimNode {.compileTime.} =
   else:
     result = nil
 
-# TODO `autoConvert` should be static[bool] - but currently this does not work - use bool when bug has been fixed. 
-# see bug https://github.com/nim-lang/Nim/issues/7375
-macro zfAddItemChk*(resultIdent: untyped, idxIdent: untyped, addItem: untyped, typedescr: static[string], resultType: static[string], autoConvert: static[int]): untyped =
+macro zfAddItemChk*(resultIdent: untyped, idxIdent: untyped, addItem: untyped, typedescr: static[string], resultType: static[string], autoConvert: static[bool]): untyped =
   result = quote:
     when compiles(zfAddItem(`resultIdent`, `idxIdent`, `addItem`)):
       zfAddItem(`resultIdent`, `idxIdent`, `addItem`)
     elif compiles(zfAddItemConvert(`resultIdent`, `idxIdent`, `addItem`)):
       zfAddItemConvert(`resultIdent`, `idxIdent`, `addItem`)
-      static:
-        if `autoConvert` == 0:
-          warning("Type " & $`addItem`.type & " was automatically converted to " & $`resultType` &
-                  "\nTo remove this warning either set second parameter of `to` to true or adapt the result type.")
+      # extra cast - see bug https://github.com/nim-lang/Nim/issues/7375
+      when bool(`autoConvert`) == false:
+        warning("Type " & $`addItem`.type & " was automatically converted to " & $`resultType` &
+                "\nTo remove this warning either set second parameter of `to` to true or adapt the result type.")
     else:
       static:
         when (`resultType`.len == 0):
@@ -531,7 +529,7 @@ proc addElemResult(ext: ExtNimNode, addItem: NimNode): NimNode {.compileTime.} =
   # use -1 to force an error in case the index was actually needed instead of silently doing the wrong thing
   let idxIdent = if ext.needsIndex: newIdentNode(zfIndexVariableName) else: newIntLitNode(-1)
   let resultType = ext.resultType.id
-  let autoConvert = if ext.resultType.autoConvert: 1 else: 0 # TODO use bool (see zfAddItemCheck)
+  let autoConvert = newLit(ext.resultType.autoConvert)
   let typedescr = ext.typeDescription
 
   result = quote:
