@@ -1492,28 +1492,40 @@ proc replaceZip(args: NimNode) : NimNode {.compileTime.} =
 
   # zip(a,b,c) <=> a --> zip(b,c) <~> a --> map(a[idx],b[idx],c[idx])
   let highList = nnkBracket.newTree()
+
+    
   for arg in args:
     # search for all zip calls and replace them with filter --> map
     if arg.kind == nnkCall and arg[0].label == $Command.zip:
       let zipCmd = arg.copyNimTree()
       let params = newPar()
+      var namedTuple = true
+      
       if idx > 0:
-        # a[idx]
-        params.add(nnkBracketExpr.newTree(args[0], newIdentNode(zfIndexVariableName)))
-        result.add(args[0].wrapIndexable())
+        # left side of original `-->` is actual first argument to zip
+        zipCmd.insert(1, args[0])
+
       for paramIdx in 1..<zipCmd.len:
         let p = zipCmd[paramIdx]
+        if not (p.kind == nnkIdent or (p.kind == nnkBracketExpr and p[0].kind == nnkIdent)):
+          namedTuple = false
         if p.kind != nnkInfix and p.kind != nnkBracketExpr and p.label != zfIteratorVariableName:
-          result.add(p.wrapIndexable())
           highList.add(nnkCall.newTree(newIdentNode("high"), p))
+          result.add(p.wrapIndexable())
           params.add(nnkBracketExpr.newTree(p, newIdentNode(zfIndexVariableName))) # map(it,b[idx],...)
         elif idx > 0:
           params.add(p)
         else:
           zfFail("No complex arguments allowed in 'zip' operation when used as first command - rather use 'a --> zip(it, ...)'.")
+      
+      if namedTuple:
+        # create a named tuple using the originally zipped items as name elements
+        for i in 0..params.len-1:
+          let p = params[i]
+          params[i] = nnkExprColonExpr.newTree(newIdentNode(p[0].repr & $i), p)
 
       if idx == 0:
-        # set the first arg of zip as the first arg in the chain (e.g. moving `a` to the left of `-->`)
+        # convert "zip(a,b,c) --> ..." to "a --> zip(b,c) --> ..."
         args.insert(0, zipCmd[1]) # a --> ...
         idx = 1
 

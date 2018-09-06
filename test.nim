@@ -927,3 +927,11 @@ suite "valid chains":
     check(bu --> map(it --> to(seq[int],true)) --> to(seq[seq[int]]) == @[@[1,2], @[3]])
     # the final conversion is not actually needed
     check(bu --> map(it --> to(seq[int],true)) == @[@[1,2], @[3]])
+
+  test "zip creates named tuple":
+    # using identifiers in zip yields named tuples
+    check($(a --> zip(b,c)) == """@[(a0: 2, b1: 0, c2: "zero"), (a0: 8, b1: 1, c2: "one"), (a0: -4, b1: 2, c2: "two")]""")
+    check($(zip(a,a) --> map(it)) == "@[(a0: 2, a1: 2), (a0: 8, a1: 8), (a0: -4, a1: -4)]")
+    # using other expressions does not yield named tuples however
+    check($(a --> zip(@[1,2])) == "@[(Field0: 2, Field1: 1), (Field0: 8, Field1: 2)]")
+    check($(@[1,2] --> zip(a)) == "@[(Field0: 1, Field1: 2), (Field0: 2, Field1: 8)]")    
