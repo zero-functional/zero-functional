@@ -1500,7 +1500,8 @@ proc replaceZip(args: NimNode) : NimNode {.compileTime.} =
       let zipCmd = arg.copyNimTree()
       let params = newPar()
       var namedTuple = true
-      
+      var createUniqueNames = false
+      var names = initSet[string]()
       if idx > 0:
         # left side of original `-->` is actual first argument to zip
         zipCmd.insert(1, args[0])
@@ -1509,6 +1510,15 @@ proc replaceZip(args: NimNode) : NimNode {.compileTime.} =
         let p = zipCmd[paramIdx]
         if not (p.kind == nnkIdent or (p.kind == nnkBracketExpr and p[0].kind == nnkIdent)):
           namedTuple = false
+        elif (p.kind == nnkIdent):
+          if names.contains(p.label):
+            createUniqueNames = true
+          names.incl(p.label)
+        else:
+          if p[0].label in names:
+            createUniqueNames = true
+          names.incl(p[0].label)
+
         if p.kind != nnkInfix and p.kind != nnkBracketExpr and p.label != zfIteratorVariableName:
           highList.add(nnkCall.newTree(newIdentNode("high"), p))
           result.add(p.wrapIndexable())
@@ -1522,7 +1532,8 @@ proc replaceZip(args: NimNode) : NimNode {.compileTime.} =
         # create a named tuple using the originally zipped items as name elements
         for i in 0..params.len-1:
           let p = params[i]
-          params[i] = nnkExprColonExpr.newTree(newIdentNode(p[0].repr & $i), p)
+          let suffix = if createUniqueNames: $i else: ""
+          params[i] = nnkExprColonExpr.newTree(newIdentNode(p[0].repr & $suffix), p)
 
       if idx == 0:
         # convert "zip(a,b,c) --> ..." to "a --> zip(b,c) --> ..."
