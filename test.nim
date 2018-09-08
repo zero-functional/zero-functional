@@ -939,3 +939,8 @@ suite "valid chains":
     # using other expressions does not yield named tuples however
     check($(a --> zip(@[1,2])) == "@[(Field0: 2, Field1: 1), (Field0: 8, Field1: 2)]")
     check($(@[1,2] --> zip(a)) == "@[(Field0: 1, Field1: 2), (Field0: 2, Field1: 8)]")    
+
+  test "uniq":
+    check(@[ 1, 2, 2, 2, 2, 3, 4, 4, 4, 5 ] --> uniq() == @[ 1, 2, 3, 4, 5 ]);
+    # uniqueness is only determined consecutively
+    check(@[ 1, 1, 2, 1, 1, 3, 1] --> uniq() == @[1, 2, 1, 3, 1]);

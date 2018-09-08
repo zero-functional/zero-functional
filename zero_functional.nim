@@ -36,7 +36,7 @@ type
     ## All available commands.
     ## 'to' - is a virtual command
     all, combinations, count, createIter, drop, dropWhile, exists, filter, find, flatten, fold, foreach,
-    index, indexedFlatten, indexedMap, indexedReduce, map, reduce, sub, zip, take, takeWhile, to
+    index, indexedFlatten, indexedMap, indexedReduce, map, reduce, sub, zip, take, takeWhile, to, uniq
 
   ReduceCommand {.pure.} = enum
     ## additional commands that operate as reduce command
@@ -105,7 +105,7 @@ type
 
 
 ## Contains all functions that may result in a sequence result. Elements are added automatically to SEQUENCE_HANDLERS
-var SEQUENCE_HANDLERS {.compileTime.} = [$Command.map, $Command.combinations, $Command.sub].toSet()
+var SEQUENCE_HANDLERS {.compileTime.} = [$Command.to].toSet()
 
 ## Can be read in test implementation
 var lastFailure {.compileTime.} : string = ""
@@ -649,8 +649,9 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
     var hasLoop = false
     let funName = funDef.label
     var funNameExport = funName
+    let isCall = funName.endswith("__call__")
     # when this function has been called with zf_inline_call the "__call__" has to be stripped for the actual zero function name
-    if funName.endswith("__call__"):
+    if isCall:
       funNameExport = funName[0..^9]
       if not (funNameExport in zfFunctionNames):
         addFunction(funNameExport) # only add it once
@@ -730,7 +731,7 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
           zfFail("'$1' has a result and must be last item in chain!" % `funNameExport`)
     else:
       # register iterator as sequence handler
-      zfAddSequenceHandlers(funName)
+      zfAddSequenceHandlers(if isCall: funName[0..funName.len-9] else: funName)
 
     if body.findNode(nnkIdent, zfIndexVariableName) != nil:
       idents(idxIdent)
@@ -926,6 +927,25 @@ zf_inline indexedMap(f):
 zf_inline filter(cond: bool):
   loop:
     if cond:
+      nil
+
+## Return the first item of an iterable
+proc zfFirstItem*[T](iter: Iterable[T]): T =
+  for it in iter:
+    return it
+
+## Implementation of `uniq`command.
+## All elements are processed that are not the same element as their preceeding element (or the first element).
+zf_inline uniq():
+  pre:
+    let listRef = ext.listRef
+  init:
+    var initialized = false
+    var prev: type(zfFirstItem(listRef))
+  loop:
+    if not initialized or prev != it:
+      initialized = true
+      prev = it
       nil
 
 ## Implementation of the 'flatten' command.
@@ -1597,7 +1617,7 @@ macro iteratorTypeTd(td: typedesc): untyped =
 macro iteratorType*(td: untyped): untyped =
   quote:
     iteratorTypeTd(`td`.type)
-
+    
 proc createIteratorFunction(args: NimNode): NimNode =
   let iterName = newIdentNode(zfInternalIteratorName)
   if createProc:
@@ -1608,7 +1628,6 @@ proc createIteratorFunction(args: NimNode): NimNode =
     result = quote:
       iterator `iterName`(): auto =
         nil
-
 
 ## Creates the function that returns the final result of all combined commands.
 ## The result type depends on map, zip or flatten calls. It may be set by the user explicitly using to(...)
