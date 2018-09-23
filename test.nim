@@ -545,10 +545,12 @@ suite "valid chains":
     let fSeq = @[1,2,3,4,5,6]
     
     # flatten defaults to seq output if not explicitly set to the output format (except DoublyLinkedList)
-    reject(fArray --> flatten() == [1,2,3,4,5,6])
-    accept((fArray --> flatten()) == fSeq)
+    let fRes : seq[int] = fArray --> flatten()
+    accept(fRes == fSeq)
     # array dimensions must be explicitly given
-    reject((fArray --> flatten() --> to(array)) == [1,2,3,4,5,6]) 
+    # comparison seq to array works now - but automatically converting to an array 
+    # needs the array size to prevent a runtime error overwriting the bounds. 
+    # reject(fArray -->> flatten() --> to(array) == [1,2,3,4,5,6]) 
     accept((fArray --> flatten() --> to(array[6,int])) == [1,2,3,4,5,6])
     accept((fArray --> flatten() --> to(array[8,int])) == [1,2,3,4,5,6,0,0]) # if array is too big, the array is filled with default zero
 
