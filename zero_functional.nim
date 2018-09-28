@@ -897,12 +897,13 @@ proc inlineMap*(ext: ExtNimNode) {.compileTime.} =
     ext.node = nnkLetSection.newTree()
     if v[0].kind == nnkPar:
       # allow tuple unpacking: ((a,b) = c)
-      let vt = nnkVarTuple.newTree()
-      for n in v[0]:
-        vt.add(n) # add all items to the tuple on the left
-      vt.add(newEmptyNode())
-      vt.add(v[1]) # add the assigned item on the right
-      ext.node.add(vt)
+      # - but the unpacking is done manually to also allow assigning arrays or sequences
+      for idx, varName in v[0]:
+        # let ((a,b) = c) is translated to 
+        # let a = c[0]
+        # let b = c[1]
+        let vt = newIdentDefs(varName, newEmptyNode(), nnkBracketExpr.newTree().add(v[1]).add(newIntLitNode(idx)))
+        ext.node.add(vt)
     else:
       # just the "normal" definition (a = b)
       ext.node.add(newIdentDefs(v[0], newEmptyNode(), v[1]))

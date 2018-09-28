@@ -538,6 +538,14 @@ suite "valid chains":
     # check that all items in the list and the seq are the same
     check(c --> all(it == b[idx]))
 
+    # check that only `2` is in both `a` and `b`
+    let both = a_array --> 
+      combinations(b_array). # build combinations with b
+      map((it_a, it_b) = c.it). # define the iterators a it_a (from a) and it_b
+      filter(it_a == it_b). # restrict to elements in both a and b
+      map(it_a) # it is still ((it_a, it_b)) => restrict to it_a 
+    check (both == @[2])  
+
   test "rejected flatten":
     # some things are not possible or won't compile
     let fArray = [[1,2,3], [4,5,6]]
@@ -550,9 +558,11 @@ suite "valid chains":
     # array dimensions must be explicitly given
     # comparison seq to array works now - but automatically converting to an array 
     # needs the array size to prevent a runtime error overwriting the bounds. 
-    # reject(fArray -->> flatten() --> to(array) == [1,2,3,4,5,6]) 
+    # reject(fArray --> flatten() --> to(array) == [1,2,3,4,5,6]) 
     accept((fArray --> flatten() --> to(array[6,int])) == [1,2,3,4,5,6])
-    accept((fArray --> flatten() --> to(array[8,int])) == [1,2,3,4,5,6,0,0]) # if array is too big, the array is filled with default zero
+    # if the array is too big, the array is filled with default zero
+    accept((fArray --> flatten() --> to(array[8,int])) == [1,2,3,4,5,6,0,0]) 
+    # if the array is too small we get a runtime error
 
     # list is flattened to seq by default
     accept((fList --> flatten()) == fSeq)
