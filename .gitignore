@@ -3,8 +3,8 @@
 # ... except all files that have a dot of course ;-)
 !**/*.*
 nimcache
-**gmon.out
+**/gmon.out
 # on windows: ignore all generated files
-**.exe 
-**.ilk 
-**.pdb
+**/*.exe 
+**/*.ilk 
+**/*.pdb
