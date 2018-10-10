@@ -956,3 +956,12 @@ suite "valid chains":
     check(@[ 1, 2, 2, 2, 2, 3, 4, 4, 4, 5 ] --> uniq() == @[ 1, 2, 3, 4, 5 ]);
     # uniqueness is only determined consecutively
     check(@[ 1, 1, 2, 1, 1, 3, 1] --> uniq() == @[1, 2, 1, 3, 1]);
+
+  test "inner exists":
+    let x = @[1,2,3]
+    let y = @[2,5,6]
+    let z = @[6,7,8]
+    check(x --> map(a = it) --> exists(y --> exists(a == it)))
+    check(x --> (a) --> exists(y --> exists(a == it)))
+    check(not (x --> map(a = it) --> exists(z --> exists(a == it))))
+    check(not (x --> (a) --> exists(z --> exists(a == it))))

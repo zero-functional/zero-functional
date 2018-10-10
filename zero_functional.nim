@@ -475,7 +475,12 @@ proc adapt(node: NimNode, iteratorIndex: int, inFold: bool=false): NimNode {.com
     for z in 0..<node.len:
       node[z] = node[z].adapt(iteratorIndex, inFold)
       if node.kind == nnkDotExpr:
-        break # change only left side of of dotExpr
+        break # change only left side of of dotExpr or arrow
+      if (node.kind == nnkInfix and node[0].label.startswith("-->")) and z > 0:
+        # arrow itself is node[0], node[1] could be changed but everything right of arrow should not be changed (z > 0)
+        # this is only relevant for nested `-->` calls
+        # this prevents replacing `it` in the context of the outer loop (outer `-->` call)
+        break
     return node
 
 ## Shortcut for `node.adapt()` using the current iterator variable.
@@ -2072,7 +2077,6 @@ macro connectCall(td: typedesc, callInfo: untyped, args: varargs[untyped]): unty
 ## Preparse the call to the iterFunction.
 proc delegateMacro(a: NimNode, b1:NimNode, td: string, debugInfo: string): NimNode =
   var b = b1
-
   # we expect b to be a call, but if we have another node - e.g. infix or bracketexpr - then
   # we search for the actual call, do the macro expansions on the call and
   # add the result back into the tree later
@@ -2093,13 +2097,23 @@ proc delegateMacro(a: NimNode, b1:NimNode, td: string, debugInfo: string): NimNo
   # b contains the calls in a tree - the first calls are deeper in the tree
   # this has to be flattened out as argument list
   var node = b
+
   let args = nnkArgList.newTree().add(a)
   while node.kind == nnkCall:
     if node[0].kind == nnkDotExpr:
-      m.prepend(nnkCall.newTree(node[0].last))
-      for z in 1..<node.len:
-        m.head.value.add(node[z])
-      node = node[0][0] # go down in the tree
+      if node[0][0].kind == nnkPar:
+        # special case: (id) or (id1,id2) - this is a shortcut for
+        # map(id = it) or map((id1,id2) = it)
+        if node[0][0].len == 1:
+          # for a single parameter remove the outer brackets
+          node[0][0] = node[0][0][0]
+        node[0][0] = nnkCall.newTree(newIdentNode("map"), nnkExprEqExpr.newTree(node[0][0], newIdentNode(zfIteratorVariableName)))
+      else:
+        # could have something like foo.bar --> ...
+        m.prepend(nnkCall.newTree(node[0].last))
+        for z in 1..<node.len:
+          m.head.value.add(node[z])
+        node = node[0][0] # go down in the tree
     elif node[0].kind == nnkIdent:
       m.prepend(node)
       break
