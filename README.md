@@ -203,6 +203,13 @@ let idx = rows --> map(row = it) --> index(row > someValue)
 let posCoords = coords --> map((x,y) = it) --> filter(x > 0 and y > 0)
 ```
 
+A shortcut syntax is also supported - actually replacing `it` with the given variable names:
+```nim
+# a iterates on x
+check(x --> (a) --> exists(y --> exists(a == it)))
+# this is equivalent to
+check(x --> map(a = it) --> exists(y --> exists(a == it)))
+```
 ### filter
 
 ```nim
