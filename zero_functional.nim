@@ -476,10 +476,12 @@ proc adapt(node: NimNode, iteratorIndex: int, inFold: bool=false): NimNode {.com
       node[z] = node[z].adapt(iteratorIndex, inFold)
       if node.kind == nnkDotExpr:
         break # change only left side of of dotExpr or arrow
-      if (node.kind == nnkInfix and node[0].label.startswith("-->")) and z > 0:
+      if ((node.kind == nnkInfix and node[0].label.startswith("-->") and z > 0) or
+          (node.kind == nnkCall and node[0].kind == nnkDotExpr and node[0][1].label.startswith("zfun"))):
         # arrow itself is node[0], node[1] could be changed but everything right of arrow should not be changed (z > 0)
         # this is only relevant for nested `-->` calls
         # this prevents replacing `it` in the context of the outer loop (outer `-->` call)
+        # zfun should be same as `-->` except here it should break after the first parameter
         break
     return node
 
@@ -1831,8 +1833,25 @@ proc checkTo(args: NimNode, td: string): ResultType {.compileTime.} =
     result.id = "seq[" & $args[0] & "]"
     result.implicit = true
   
+proc replaceSimpleMap(args: NimNode) {.compileTime.} =
+  for i in 0..args.len-1: 
+    if args[i].kind == nnkPar:
+      var allIds = true 
+      # special case: (id) or (id1,id2) - this is a shortcut for
+      # map(id = it) or map((id1,id2) = it)
+      if args[i].len == 1 and args[i][0].kind == nnkIdent:
+        # for a single parameter remove the outer brackets
+        args[i] = args[i][0]
+      for child in args[i]:
+        if child.kind != nnkIdent:
+          allIds = false
+          break
+      if allIds:
+        args[i] = nnkCall.newTree(newIdentNode("map"), nnkExprEqExpr.newTree(args[i], newIdentNode(zfIteratorVariableName)))
+
 ## Main function that creates the outer function call.
 proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compileTime.} =
+  args.replaceSimpleMap()
   let debug = debugInfo.len() > 0
   let orig = if debug: args.copyNimTree() else: nil
   var resultType = args.checkTo(td)
@@ -2102,12 +2121,7 @@ proc delegateMacro(a: NimNode, b1:NimNode, td: string, debugInfo: string): NimNo
   while node.kind == nnkCall:
     if node[0].kind == nnkDotExpr:
       if node[0][0].kind == nnkPar:
-        # special case: (id) or (id1,id2) - this is a shortcut for
-        # map(id = it) or map((id1,id2) = it)
-        if node[0][0].len == 1:
-          # for a single parameter remove the outer brackets
-          node[0][0] = node[0][0][0]
-        node[0][0] = nnkCall.newTree(newIdentNode("map"), nnkExprEqExpr.newTree(node[0][0], newIdentNode(zfIteratorVariableName)))
+        node[0].replaceSimpleMap()
       else:
         # could have something like foo.bar --> ...
         m.prepend(nnkCall.newTree(node[0].last))
