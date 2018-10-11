@@ -964,9 +964,8 @@ suite "valid chains":
     check(x --> map(a = it) --> exists(y --> exists(a == it)))
     check(x --> (a) --> exists(y --> exists(a == it)))
     check(not (x --> map(a = it) --> exists(z --> exists(a == it))))
-    let b = x.zfun:
-      map(a = it)
+    let b = x.zfun(a):
       exists:
-        z.zfun:
-          exists(a == it)
+        z.zfun(b):
+          exists(a == b)
     check(not b)

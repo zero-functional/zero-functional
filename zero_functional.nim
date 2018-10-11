@@ -2191,10 +2191,20 @@ macro zfun*(a: untyped, b: untyped): untyped =
   result = quote:
     zfunCall(type(`a`), false, `a`, `b`)
 
+macro zfun*(a: untyped, b: untyped, c: untyped): untyped =
+  c.insert(0, newPar(b))
+  result = quote:
+    zfunCall(type(`a`), false, `a`, `c`)
+    
 macro zfunDbg*(a: untyped, b: untyped): untyped =
   result = quote:
     zfunCall(type(`a`), true, `a`, `b`)
 
+macro zfunDbg*(a: untyped, b: untyped, c: untyped): untyped =
+  c.insert(0, newPar(b))
+  result = quote:
+    zfunCall(type(`a`), true, `a`, `c`)
+    
 ## general macro to invoke all available zero_functional functions
 macro `-->`*(a: untyped, b: untyped): untyped =
   let (a,b2,debug) = checkArrow(a,b)
@@ -2218,3 +2228,4 @@ macro `-->>`*(a: untyped, b: untyped): untyped =
       delegateArrow(type(`a`), `a`, `b2`, `l`)
   else:
     result = delegateMacro(a, b2, "seq", l)
+
