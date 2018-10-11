@@ -210,6 +210,16 @@ check(x --> (a) --> exists(y --> exists(a == it)))
 # this is equivalent to
 check(x --> map(a = it) --> exists(y --> exists(a == it)))
 ```
+
+`zfun` also supports this shortcut either as single line `(a)` or as a parameter to `zfun`:
+```nim
+let b = x.zfun(a):
+  exists:
+    z.zfun(b):
+      exists(a == b)
+check(not b)
+```
+
 ### filter
 
 ```nim
