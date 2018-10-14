@@ -964,6 +964,10 @@ suite "valid chains":
     check(x --> map(a = it) --> exists(y --> exists(a == it)))
     check(x --> (a) --> exists(y --> exists(a == it)))
     check(not (x --> map(a = it) --> exists(z --> exists(a == it))))
+    check(x --> (it_x) --> exists(y --> (it_y) --> exists(it_x == it_y)))
+    # alternative (maybe nicer to read) bracketing
+    check((x --> it_x) --> exists((y --> it_y) --> exists(it_x == it_y)))
+    
     let b = x.zfun(a):
       exists:
         z.zfun(b):

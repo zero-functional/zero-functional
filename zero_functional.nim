@@ -8,6 +8,9 @@ const zfListIteratorName* = "__itlist__"
 const zfMinHighVariableName* = "__minHigh__"
 const zfInternalIteratorName* = "__autoIter__"
 
+const zfArrow = "-->"
+const zfArrowDbg = "-->>"
+
 const internalIteratorName = "__" & zfIteratorVariableName & "__"
 const useInternalAccu = zfAccuVariableName != "result"
 const internalAccuName = if (useInternalAccu): "__" & zfAccuVariableName & "__" else: "result"
@@ -476,7 +479,7 @@ proc adapt(node: NimNode, iteratorIndex: int, inFold: bool=false): NimNode {.com
       node[z] = node[z].adapt(iteratorIndex, inFold)
       if node.kind == nnkDotExpr:
         break # change only left side of of dotExpr or arrow
-      if ((node.kind == nnkInfix and node[0].label.startswith("-->") and z > 0) or
+      if ((node.kind == nnkInfix and node[0].label.startswith(zfArrow) and z > 0) or
           (node.kind == nnkCall and node[0].kind == nnkDotExpr and node[0][1].label.startswith("zfun"))):
         # arrow itself is node[0], node[1] could be changed but everything right of arrow should not be changed (z > 0)
         # this is only relevant for nested `-->` calls
@@ -2107,7 +2110,12 @@ proc delegateMacro(a: NimNode, b1:NimNode, td: string, debugInfo: string): NimNo
     if call != nil:
       b = call
     else:
-      zfFail("Unexpected expression in macro call on right side of '-->'")
+      if outer.kind == nnkIdent:
+        # shortcut syntax for iterator definition - handle later
+        return quote:
+          `a`
+      else:
+        zfFail("Unexpected expression in macro call on right side of '-->'")
 
   # now re-arrange all dot expressions to one big parameter call
   # i.e. a --> filter(it > 0).map($it) gets a.connect(filter(it>0),map($it))
@@ -2116,8 +2124,6 @@ proc delegateMacro(a: NimNode, b1:NimNode, td: string, debugInfo: string): NimNo
   # b contains the calls in a tree - the first calls are deeper in the tree
   # this has to be flattened out as argument list
   var node = b
-
-  let args = nnkArgList.newTree().add(a)
   while node.kind == nnkCall:
     if node[0].kind == nnkDotExpr:
       if node[0][0].kind == nnkPar:
@@ -2133,6 +2139,13 @@ proc delegateMacro(a: NimNode, b1:NimNode, td: string, debugInfo: string): NimNo
       break
     else:
       break
+
+  let args = nnkArgList.newTree()
+  # re-arrange shortcut expression of (a --> itName) to alternative shortcut a --> (itName)
+  if a.kind == nnkPar and a[0].kind == nnkInfix and a[0][0].label.startswith(zfArrow):
+    args.add(nnkArgList.newTree().add(a[0][1])).add(newPar(a[0][2]))
+  else:
+    args.add(a)
   for it in m:
     args.add(it)
   result = iterHandler(args, td, debugInfo)
@@ -2161,16 +2174,16 @@ proc getOp(a: NimNode): string =
 proc checkArrow(a: NimNode, b: NimNode, debug: bool = false): (NimNode, NimNode, bool) =
   result = (a,b,debug)
   let op = a.getOp()
-  if op == "-->" or op == "-->>":
+  if op == zfArrow or op == zfArrowDbg:
     # also replace the arrows with "."
     let br = nnkDotExpr.newTree(a[2], b.replArrow(op))
     # ensure to use the left-most arrow
     let op2 = a[1].getOp()
-    if op2 == "-->" or op2 == "-->>":
-      return checkArrow(a[1], br, op2 == "-->>")
+    if op2 == zfArrow or op2 == zfArrowDbg:
+      return checkArrow(a[1], br, op2 == zfArrowDbg)
     # this is kind of inefficient - but using br directly does not work here
     # probably the tree is unbalanced somehow
-    return (a[1], parseExpr(br.repr), op == "-->>")
+    return (a[1], parseExpr(br.repr), op == zfArrowDbg)
   
 ## Alternative call with comma separated arguments.
 macro connect*(args: varargs[untyped]): untyped =
@@ -2229,3 +2242,4 @@ macro `-->>`*(a: untyped, b: untyped): untyped =
   else:
     result = delegateMacro(a, b2, "seq", l)
 
+  
