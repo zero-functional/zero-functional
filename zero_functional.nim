@@ -1242,10 +1242,44 @@ proc inlineReduce(ext: ExtNimNode) {.compileTime.} =
           let `nextIt` = (result, prevIt)
           result = op
 
+proc combineWithOtherCollection(ext: ExtNimNode, indexed: bool) {.compileTime.} =
+  idents(idxIdent(zfIndexVariableName))
+  var itIdent = ext.prevItNode()
+  let iterators = nnkBracket.newTree(itIdent)
+  let indices = nnkBracket.newTree(idxIdent)
+  var code = nnkStmtList.newTree()
+  var root = code
+  var idx = 1
+  while idx < ext.node.len:
+    itIdent = ext.nextItNode()
+    var idxInner = genSym(nskVar, "__idxInner__")
+    iterators.add(itIdent)
+    indices.add(idxInner)
+    let listRef = ext.node[idx]
+    idx += 1
+    code.add quote do:
+      var `idxInner` = -1
+      for `itIdent` in `listRef`:
+        `idxInner` += 1
+        nil
+    code = code.getStmtList()
+  let nextIt = ext.nextItNode()
+  if indexed:
+    code.add quote do:
+      let `nextIt` = (idx: `indices`, item: `iterators`)
+      nil
+  else:
+    code.add quote do:
+      let `nextIt` = `iterators`
+      nil
+  ext.node = root
+
 ## Implementation of the 'combinations' command.
 ## Each two distinct elements of the input list are combined to one element.
 proc inlineCombinations(ext: ExtNimNode) {.compileTime.} =
   if ext.node.len == 1:
+    # combine elements in collection with itself
+    # but prevent unnecessary unordered combinations
     if ext.isListType():
       zf_inline_call combinations():
         pre:
@@ -1267,30 +1301,12 @@ proc inlineCombinations(ext: ExtNimNode) {.compileTime.} =
           for idxInner in idx+1..<listRef.len():
             let it = [listRef[idx], listRef[idxInner]]
             nil
-  else: # combine with other collections
-    var code = nnkStmtList.newTree()
-    var root = code
-    var itIdent = ext.prevItNode()
-    let iterators = nnkBracket.newTree(itIdent)
-    var idx = 1
-    while idx < ext.node.len:
-      itIdent = ext.nextItNode()
-      iterators.add(itIdent)
-      let listRef = ext.node[idx]
-      idx += 1
-      code.add quote do:
-        for `itIdent` in `listRef`:
-          nil
-      code = code.getStmtList()
-    let nextIt = ext.nextItNode()
-    code.add quote do:
-      let `nextIt` = `iterators`
-      nil
-    ext.node = root
+  else: 
+    ext.combineWithOtherCollection(false)
 
 proc inlineIndexedCombinations(ext: ExtNimNode) {.compileTime.} =
-  idents(idxIdent(zfIndexVariableName))
   if ext.node.len == 1:
+    # combine elements in collection with itself
     if ext.isListType():
       zf_inline_call indexedCombinations():
         pre:
@@ -1315,31 +1331,7 @@ proc inlineIndexedCombinations(ext: ExtNimNode) {.compileTime.} =
             let it = (idx: [idx,idxInner], item: (listRef[idx], listRef[idxInner]))
             nil
   else: # combine with other collections
-    var code = nnkStmtList.newTree()
-    var root = code
-    var itIdent = ext.prevItNode()
-    let iterators = nnkBracket.newTree(itIdent)
-    let indices = nnkBracket.newTree(idxIdent)
-    var idx = 1
-    while idx < ext.node.len:
-      itIdent = ext.nextItNode()
-      var idxInner = genSym(nskVar, "__idxInner__")
-      iterators.add(itIdent)
-      indices.add(idxInner)
-      let listRef = ext.node[idx]
-      idx += 1
-      code.add quote do:
-        var `idxInner` = -1
-        for `itIdent` in `listRef`:
-          `idxInner` += 1
-          nil
-      code = code.getStmtList()
-    let nextIt = ext.nextItNode()
-    code.add quote do:
-      let `nextIt` = (idx: `indices`, item: `iterators`)
-      nil
-    ext.node = root
-
+    ext.combineWithOtherCollection(true)
 
 
 macro genTupleSeqCalls(maxTupleSize: static[int]): untyped =
