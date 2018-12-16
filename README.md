@@ -583,6 +583,7 @@ The manual `inline`-implementations should follow certain rules.
 - check of parameters / number of parameters has to be done in the implementation 
 - use `zfFail()` if any checks fail
 - register functions that use neither `zf_inline` nor `zf_inline_call` using `zfAddFunction`
+- functions that create another sequence have to be registered with `zfAddSequenceHandlers`
 - finally call `zfCreateExtension` after all `zf_inline...` definitions and `zfAddFunction` calls - before using the actual function implementation
 
 Example of `count` that sets a result:
