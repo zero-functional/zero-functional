@@ -291,7 +291,7 @@ sequence --> otherOperations(..) --> index(cond): int
 
 ### indexedMap
 
-Generates a tuple `(index, it)` for each element in the collection.
+Generates a named tuple `(idx: index, item: it)` for each element in the collection.
 
 ```nim
 var n = zip(a, b, c) -->
@@ -351,6 +351,7 @@ check(@[11,2,0,-2,1,3,-1] --> indexedMin() == (3,-2))
 check(@[11,2,0,-2,1,3,-1] --> indexedMax() == (11,0))
 ```
 
+Note that a named tuple is created and the index is also accessible via `.idx` and the actual item with `.item`.
 
 ### foreach
 
@@ -430,6 +431,7 @@ Is similar to `flatten`, except that it returns the index inside original sub-li
 check(@[@[1,2],@[3],@[4,5,6]] --> indexedFlatten()            == @[(0,1),(1,2),(0,3),(0,4),(1,5),(2,6)])
 check(@[@[1,2],@[3],@[4,5,6]] --> flatten() --> map((idx,it)) == @[(0,1),(1,2),(2,3),(3,4),(4,5),(5,6)])
 ```
+Note that as in the other `indexed` commands the tuples are named tuples and the index is also accessible via `.idx` and the actual item with `.item`.
 
 ### combinations
 
