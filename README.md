@@ -351,7 +351,7 @@ check(@[11,2,0,-2,1,3,-1] --> indexedMin() == (3,-2))
 check(@[11,2,0,-2,1,3,-1] --> indexedMax() == (11,0))
 ```
 
-Note that a named tuple is created and the index is also accessible via `.idx` and the actual item with `.item`.
+Note that a named tuple is created and the index is also accessible via `.idx` and the actual element with `.elem`.
 
 ### foreach
 
@@ -431,7 +431,7 @@ Is similar to `flatten`, except that it returns the index inside original sub-li
 check(@[@[1,2],@[3],@[4,5,6]] --> indexedFlatten()            == @[(0,1),(1,2),(0,3),(0,4),(1,5),(2,6)])
 check(@[@[1,2],@[3],@[4,5,6]] --> flatten() --> map((idx,it)) == @[(0,1),(1,2),(2,3),(3,4),(4,5),(5,6)])
 ```
-Note that as in the other `indexed` commands the tuples are named tuples and the index is also accessible via `.idx` and the actual item with `.item`.
+Note that as in the other `indexed` commands the tuples are named tuples and the index is also accessible via `.idx` and the actual element with `.elem`.
 
 ### combinations
 
@@ -449,10 +449,10 @@ check(@[1,2,3] --> combinations(@[4,5]) == @[[1,4],[1,5],[2,4],[2,5],[3,4],[3,5]
 
 ### indexedCombinations
 
-Same as `combinations` with the additional indices of the resulting combined items. The resulting iterator is a named tuple with the combined items and their indices `(idx: [idx1, idx2], item: [item1, item2])`.
+Same as `combinations` with the additional indices of the resulting combined items. The resulting iterator is a named tuple with the combined items and their indices `(idx: [idx1, idx2], elem: [combined_element1, combined_element2])`.
 ```nim
 # find the indices of the elements in the collection, where the diff to the other element is 1
-check(@[11,2,7,3,4] --> indexedCombinations() --> filter(abs(it.item[1]-it.item[0]) == 1) --> map(it.idx) == @[[1,3],[3,4]])
+check(@[11,2,7,3,4] --> indexedCombinations() --> filter(abs(it.elem[1]-it.elem[0]) == 1) --> map(it.idx) == @[[1,3],[3,4]])
 #          ^   ^ ^
 ```
 
