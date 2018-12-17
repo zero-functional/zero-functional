@@ -139,10 +139,10 @@ zf_inline removeDoubles():
     # this is the tricky one: remove later elements that already are in the list
     # this actually translates in the inner for loop of combinations as:
     # if idx[0] > idx[1] and it[0] == it[1]: break
-    takeWhile(not(it.item[0] == it.item[1] and it.idx[0] > it.idx[1])) 
+    takeWhile(not(it.elem[0] == it.elem[1] and it.idx[0] > it.idx[1])) 
     # go back to the original elements
     filter(it.idx[0] == it.idx[1]) 
-    map(it.item[0])
+    map(it.elem[0])
 
 proc inlineRemove*(ext: ExtNimNode) {.compileTime.} =
   ## remove function that removes elements from a collection
@@ -521,7 +521,7 @@ suite "valid chains":
     proc abs1(a: int, b: int) : bool = abs(a-b) == 1 
     let b = items -->
       indexedCombinations().
-      filter(abs1(it.item[0], it.item[1])).
+      filter(abs1(it.elem[0], it.elem[1])).
       map(it.idx) 
     check(b == @[[0, 2], [2, 5], [3, 4]])
     check(b --> all(abs1(items[it[0]], items[it[1]])))
@@ -529,7 +529,7 @@ suite "valid chains":
     # the same again, but store it to a new list
     let c = items -->
       indexedCombinations().
-      filter(abs1(it.item[0], it.item[1])).
+      filter(abs1(it.elem[0], it.elem[1])).
       map(it.idx).
       to(list)
     
@@ -546,9 +546,7 @@ suite "valid chains":
 
     # check indexedCombinations with 2 different collections
     check([11,22] --> indexedCombinations([33,44]) == 
-      @[(idx: [0, 0], item: [11, 33]), (idx: [0, 1], item: [11, 44]), (idx: [1, 0], item: [22, 33]), (idx: [1, 1], item: [22, 44])])
-
-
+      @[(idx: [0, 0], elem: [11, 33]), (idx: [0, 1], elem: [11, 44]), (idx: [1, 0], elem: [22, 33]), (idx: [1, 1], elem: [22, 44])])
   
   test "rejected flatten":
     # some things are not possible or won't compile
@@ -811,10 +809,10 @@ suite "valid chains":
               # this is the tricky one: remove later elements that already are in the list
               # this actually translates in the inner for loop of combinations as:
               # if idx[0] > idx[1] and it[0] == it[1]: break
-              takeWhile(not(it.idx[0] > it.idx[1] and it.item[0] == it.item[1])). 
+              takeWhile(not(it.idx[0] > it.idx[1] and it.elem[0] == it.elem[1])). 
               # go back to the original elements
               filter(it.idx[0] == it.idx[1]). 
-              map(it.item[0])  ==
+              map(it.elem[0])  ==
                                @[1,2,3,4])
   ## Example that uses own extensions: `average`, `intersect`, `inc` and `filterNot`. 
   ## `intersect` uses the same implementation as in the previous test.

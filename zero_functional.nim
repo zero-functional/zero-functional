@@ -6,6 +6,8 @@ const zfIndexVariableName* = "idx"
 const zfListIteratorName* = "__itlist__"
 const zfMinHighVariableName* = "__minHigh__"
 const zfInternalIteratorName* = "__autoIter__"
+const zfIndexedElemName* = "elem"
+const zfIndexedIndexName* = "idx"
 
 const zfArrow = "-->"
 const zfArrowDbg = "-->>"
@@ -896,7 +898,7 @@ macro zf_inline_dbg*(header: untyped, body:untyped): untyped =
   result = zeroParse(header, body)
   echo(result.repr)
 
-## calls zf_inline registering the function call and calls the actual function.
+## calls `zf_inline` registering the function call and calls the actual function.
 ## This can be used to add own implementations of inline-functions with parts in Zero-DSL.
 macro zf_inline_call*(header: untyped, body: untyped): untyped =
   doAssert(header.kind == nnkCall or header.kind == nnkObjConstr)
@@ -908,7 +910,12 @@ macro zf_inline_call*(header: untyped, body: untyped): untyped =
     `q`
     `fun`(`ext`)
 
-
+## creates the result tuple of an `indexed` command with index first, then the actual element.
+macro mkIndexedResult(idxVar: untyped, elemVar: untyped): untyped =
+  idents(elemName(zfIndexedElemName), idxName(zfIndexedIndexName))
+  quote:
+    (`idxName`: `idxVar`, `elemName`: `elemVar`)    
+    
 ## Implementation of the 'map' command.
 ## Each element of the input is mapped to a given function.
 ## It is also possible to add own definitions - either as normal value or as a tuple.
@@ -945,7 +952,7 @@ proc inlineMap*(ext: ExtNimNode) {.compileTime.} =
 
 zf_inline indexedMap(f):
   loop:
-    let it = (idx: idx, item: f)
+    let it = mkIndexedResult(idx, f)
 
 ## Implementation of the 'filter' command.
 ## The trailing commands execution depend on the filter condition to be true.
@@ -1000,7 +1007,7 @@ zf_inline indexedFlatten():
     for flattened in it:
       idxInner += 1
       idxFlatten += 1
-      let it = (idx: idxInner, item: flattened)
+      let it = mkIndexedResult(idxInner, flattened)
       let `idx`  = idxFlatten
       discard(`idx`)
 
@@ -1224,7 +1231,7 @@ proc inlineReduce(ext: ExtNimNode) {.compileTime.} =
           let `nextIt` = (oldValue, it) # reduce
           let newValue = op
           if not (oldValue == newValue):
-            result = (idx: idx, item: newValue) # propagate new value with idx
+            result = mkIndexedResult(idx, newValue) # propagate new value with idx
       endLoop:
         if initAccu:
           result[0] = -1 # we actually do not have a result: set index to -1
@@ -1266,7 +1273,7 @@ proc combineWithOtherCollection(ext: ExtNimNode, indexed: bool) {.compileTime.} 
   let nextIt = ext.nextItNode()
   if indexed:
     code.add quote do:
-      let `nextIt` = (idx: `indices`, item: `iterators`)
+      let `nextIt` = mkIndexedResult(`indices`, `iterators`)
       nil
   else:
     code.add quote do:
@@ -1315,7 +1322,7 @@ proc inlineIndexedCombinations(ext: ExtNimNode) {.compileTime.} =
           var itListInner = itList.next
           var idxInner = idx
           while itListInner != nil:
-            let it = (idx: [idx, idxInner], item: [it, itListInner.value])
+            let it = mkIndexedResult([idx, idxInner], [it, itListInner.value])
             idxInner += 1
             itListInner = itListInner.next
             nil
@@ -1328,7 +1335,7 @@ proc inlineIndexedCombinations(ext: ExtNimNode) {.compileTime.} =
             static:
               zfFail("Only index with len types supported for combinations")
           for idxInner in idx+1..<listRef.len():
-            let it = (idx: [idx,idxInner], item: (listRef[idx], listRef[idxInner]))
+            let it = mkIndexedResult([idx,idxInner], [listRef[idx], listRef[idxInner]])
             nil
   else: # combine with other collections
     ext.combineWithOtherCollection(true)
