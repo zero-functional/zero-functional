@@ -300,6 +300,8 @@ proc createCombination*[A,T](it: array[A,T], idx: array[A,int]): Combination[A,T
   result = Combination[A,T](it: it, idx: idx)
 
 ## iterator over tuples (needed for flatten to work on tuples, e.g. from zipped lists)
+## NOTE: this iterator can only be used for tuples containing elements of the
+## same type! Otherwise it errors at compile time.
 iterator items*[T: tuple](a:T) : auto =
   for i in a.fields:
     yield i
