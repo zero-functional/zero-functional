@@ -298,17 +298,17 @@ proc createCombination*[A,T](it: array[A,T], idx: array[A,int]): Combination[A,T
   result = Combination[A,T](it: it, idx: idx)
 
 ## iterator over tuples (needed for flatten to work on tuples, e.g. from zipped lists)
-iterator items*[T: tuple](a:T) : untyped =
+iterator items*[T: tuple](a:T) : auto =
   for i in a.fields:
     yield i
 
 ## iterate over concept FiniteIndexable
-iterator items*[T: FiniteIndexable](f:T) : untyped =
+iterator items*[T](f: FiniteIndexable[T]) : T =
   for i in f.low()..f.high():
     yield f[i]
 
 ## iterate over concept FiniteIndexable
-iterator items*[T: FiniteIndexableLen](f:T) : untyped =
+iterator items*[T](f: FiniteIndexableLen[T]) : T =
   for i in 0..<f.len():
     yield f[i]
 
