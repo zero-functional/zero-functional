@@ -80,10 +80,12 @@ type
   FiniteIndexable*[T] = concept a
     a.low() is int
     a.high() is int
+    a[int] is T
     a[int]
 
   FiniteIndexableLen*[T] = concept a
     a.len() is int
+    a[int] is T
     a[int]
 
   FiniteIndexableLenIter*[T] = concept a
