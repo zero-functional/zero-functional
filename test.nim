@@ -949,8 +949,8 @@ suite "valid chains":
     let a1 = @[1,2,3]
     check($(a --> zip(a, a1)) == "@[(a0: 2, a1: 2, a12: 1), (a0: 8, a1: 8, a12: 2), (a0: -4, a1: -4, a12: 3)]")
     # using other expressions does not yield named tuples however
-    check($(a --> zip(@[1,2])) == "@[(Field0: 2, Field1: 1), (Field0: 8, Field1: 2)]")
-    check($(@[1,2] --> zip(a)) == "@[(Field0: 1, Field1: 2), (Field0: 2, Field1: 8)]")    
+    check($(a --> zip(@[1,2])) == "@[(2, 1), (8, 2)]")
+    check($(@[1,2] --> zip(a)) == "@[(1, 2), (2, 8)]")
 
   test "uniq":
     check(@[ 1, 2, 2, 2, 2, 3, 4, 4, 4, 5 ] --> uniq() == @[ 1, 2, 3, 4, 5 ]);
