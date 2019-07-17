@@ -77,17 +77,17 @@ type
     it*: array[A,T]
     idx*: array[A,int]
 
+# a few problems with concepts and T - but also pushing doesn't help
+{.push hint[XDeclaredButNotUsed]: off.}
 type
-  FiniteIndexable*[T] = concept a
+  FiniteIndexable*[T] {.hint[XDeclaredButNotUsed]: off.} = concept a
     a.low() is int
     a.high() is int
     a[int] is T
-    a[int]
 
-  FiniteIndexableLen*[T] = concept a
+  FiniteIndexableLen*[T] {.hint[XDeclaredButNotUsed]: off.} = concept a
     a.len() is int
     a[int] is T
-    a[int]
 
   FiniteIndexableLenIter*[T] = concept a
     a.len() is int
@@ -108,10 +108,10 @@ type
     for it in a:
       it is T
     b.add(T)
-
+{.pop.}
 
 ## Contains all functions that may result in a sequence result. Elements are added automatically to SEQUENCE_HANDLERS
-var SEQUENCE_HANDLERS {.compileTime.} = [$Command.to].toSet()
+var SEQUENCE_HANDLERS {.compileTime.} = [$Command.to].toHashSet()
 
 ## Can be read in test implementation
 var lastFailure {.compileTime.} : string = ""
@@ -149,11 +149,11 @@ proc zfSetExtension*(extension: proc(ext: ExtNimNode): ExtNimNode) {.compileTime
 
 ## Register sequence handlers for an extension.
 proc zfAddSequenceHandlers*(seqHandlers: seq[string]) {.compileTime.} =
-  SEQUENCE_HANDLERS.incl(seqHandlers.toSet)
+  SEQUENCE_HANDLERS.incl(seqHandlers.toHashSet)
 
 ## same as zfAddSequenceHandlers(seq[string]) added for convenience
 proc zfAddSequenceHandlers*(seqHandlers: varargs[string]) {.compileTime.} =
-  SEQUENCE_HANDLERS.incl(seqHandlers.toSet)
+  SEQUENCE_HANDLERS.incl(seqHandlers.toHashSet)
 
 ## check if the discriminator function is valid for the node or one of its children (depth-first). 
 proc checkNode(node: NimNode, discriminator: proc (n: NimNode): bool): NimNode =
@@ -291,7 +291,7 @@ proc zfInit*[T, U](a: SinglyLinkedList[T], handler: proc(it: T): U): SinglyLinke
   initSinglyLinkedList[U]()
 ## Special implementation to initialize HashSet output.
 proc zfInit*[T, U](a: HashSet[T], handler: proc(it: T): U): HashSet[U] =
-  initSet[U]()
+  initHashSet[U]()
 proc zfInit*[T, U](a: seq[T], handler: proc(it: T): U): seq[U] =
   @[]
 
@@ -1602,7 +1602,7 @@ proc replaceZip(args: NimNode) : NimNode {.compileTime.} =
       let params = newPar()
       var namedTuple = true
       var createUniqueNames = false
-      var names = initSet[string]()
+      var names = initHashSet[string]()
       if idx > 0:
         # left side of original `-->` is actual first argument to zip
         zipCmd.insert(1, args[0])

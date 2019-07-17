@@ -610,7 +610,6 @@ suite "valid chains":
     # it does not define zfInit to initialize the type nor add (or append) to add elements
     # also the `[]=` operator is missing
     let si = initSimpleIter()
-    let si2 = initSimpleIter()
     accept(si --> filter(it > 2) is seq[int]) 
     accept(si --> filter(it > 2) --> to(seq) == @[3])
     accept(si --> map($it) is seq[string]) # transformed to seq[string]

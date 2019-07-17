@@ -19,7 +19,7 @@ macro benchmark*(benchmarkName: static[string], code: untyped): untyped =
   result.add(getAst(finish(benchmarkName, a)))
   # echo repr(result)
 
-proc echoBenchmark*[T](benchmarkName: static[string], call: proc (): T): untyped =
+proc echoBenchmark*[T](benchmarkName: static[string], call: proc (): T) =
   if true:
     var res: T.type
     benchmark benchmarkName:
