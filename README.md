@@ -99,7 +99,6 @@ The supported variable names (can be changed at the beginning of the [zero_funct
 * `it` is used for the iterator variable
 * `idx` is used as integer index of current iteration
 * `a` is used as the accumulator in `fold`
-* `c` is used as combination element in `combinations`
 
 
 ## Seq and arrays
@@ -292,13 +291,13 @@ sequence --> otherOperations(..) --> index(cond): int
 
 ### indexedMap
 
-Generates a tuple `(index, it)` for each element in the collection.
+Adds or prepends the index of each element in the collection to the element itself and generates a named tuple `(idx: index, elem: it)` for each element in the collection. This is similar to [`enumerate`](https://docs.python.org/3/library/functions.html#enumerate) in python.
 
 ```nim
 var n = zip(a, b, c) -->
             indexedMap(f(it[0], it[1])).
-            filter(it[0] < 10 and it[1] mod 4 > 1).
-            map(it[1] * 2).
+            filter(it.idx < 10 and it.elem mod 4 > 1).
+            map(it.elem * 2).
             all(it > 4)
 ```
 
@@ -352,6 +351,7 @@ check(@[11,2,0,-2,1,3,-1] --> indexedMin() == (3,-2))
 check(@[11,2,0,-2,1,3,-1] --> indexedMax() == (11,0))
 ```
 
+Note that a named tuple is created and the index is also accessible via `.idx` and the actual element with `.elem`.
 
 ### foreach
 
@@ -431,17 +431,29 @@ Is similar to `flatten`, except that it returns the index inside original sub-li
 check(@[@[1,2],@[3],@[4,5,6]] --> indexedFlatten()            == @[(0,1),(1,2),(0,3),(0,4),(1,5),(2,6)])
 check(@[@[1,2],@[3],@[4,5,6]] --> flatten() --> map((idx,it)) == @[(0,1),(1,2),(2,3),(3,4),(4,5),(5,6)])
 ```
+Note that as in the other `indexed` commands the tuples are named tuples and the index is also accessible via `.idx` and the actual element with `.elem`.
 
 ### combinations
 
-Combines each item of the original collection with each other - the resulting variable is `c`, with `c.it` as an array of 2 containing the combined iterator values and `c.idx` containing their indices.
+Combines each element of the original collection with each other - the resulting variable is an array of 2 containing the combined iterator values. In case no other collection is supplied the combinations are done on the input collection - only combining different elements with each other.
+```nim
+# combine collection with itself results in unordered combinations - only different elements are combined
+check(@[1,2,3] --> combinations() == @[[1,2],[1,3],[2,3])
+# combine collection with the same collection again as a parameter results in comparing all elements in 
+# all possible ordered combinations
+check(@[1,2,3] --> combinations(@[1,2,3]) == @[[1,1],[1,2],[1,3],[2,1],[2,2],[2,3],[3,1],[3,2],[3,3]])
 
+# combine all elements of first collection with elements of the second collections
+check(@[1,2,3] --> combinations(@[4,5]) == @[[1,4],[1,5],[2,4],[2,5],[3,4],[3,5]])
+```
+
+### indexedCombinations
+
+Same as `combinations` with the additional indices of the resulting combined elements. The resulting iterator is a named tuple with the combined elements and their indices `(idx: [idx1, idx2], elem: [combined_element1, combined_element2])`.
 ```nim
 # find the indices of the elements in the collection, where the diff to the other element is 1
-check(@[11,2,7,3,4] --> combinations() --> filter(abs(c.it[1]-c.it[0]) == 1) --> map(c.idx) == @[[1,3],[3,4]])
+check(@[11,2,7,3,4] --> indexedCombinations() --> filter(abs(it.elem[1]-it.elem[0]) == 1) --> map(it.idx) == @[[1,3],[3,4]])
 #          ^   ^ ^
-# combine all elements of first collection with elements of second collections
-check(@[1,2,3] --> combinations(@[4,5]) --> map(c.it) == @[[1,4],[1,5],[2,4],[2,5],[3,4],[3,5]])
 ```
 
 
@@ -554,7 +566,7 @@ Special variables for `zf_inline` statements are:
 - `it`: when used is the previous iterator, when defined with `let it = ` creates a new iterator
 - `idx`: the running index in the loop
 - `result`: the overall result and return type of the operation
-All other variables have to be defined in the `pre`-section, also when automatically assigned, e.g. `combinations` sets a variable `c`, but when `combinations` is used in the `delegate` section, the variable `c` has to be defined in the `pre` section of the function that calls `combinations`.
+All other variables have to be defined in the `pre`-section, also when automatically assigned, e.g. when overriding the `idx` variable or when accessing a reference to the list as `listRef`.
 See `intersect` or `removeDoubles` implementation in [test.nim](test.nim) as an example.
 
 The manual `inline`-implementations should follow certain rules. 
@@ -571,6 +583,7 @@ The manual `inline`-implementations should follow certain rules.
 - check of parameters / number of parameters has to be done in the implementation 
 - use `zfFail()` if any checks fail
 - register functions that use neither `zf_inline` nor `zf_inline_call` using `zfAddFunction`
+- functions that create another sequence have to be registered with `zfAddSequenceHandlers`
 - finally call `zfCreateExtension` after all `zf_inline...` definitions and `zfAddFunction` calls - before using the actual function implementation
 
 Example of `count` that sets a result:

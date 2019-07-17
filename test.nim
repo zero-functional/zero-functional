@@ -109,24 +109,23 @@ zf_inline average():
       result = sum / float(countIdx)
 
 zf_inline intersect(_):
-# intersect from the example test case below:
+# get all elements that are contained in all collections given as parameters
+# this function is built similar to the test case below:
 #   combinations(b,squaresPlusOne()). # combine all elements of a,b...
-#   map(c.it). # get the iterator contents of each combination (indices not relevant here)
 #   filter(it[0] == it[1] and it[0] == it[2]). # this is the trickier one
 #   map(it[0])
 
   pre:
-    let c = newIdentNode(zfCombinationsId)
-    # build the it[0] == it[1] and ... chain
+    # first build the it[0] == it[1] and ... chain
     var chain = quote: true
     for i in (1..<ext.node.len):
       # ... and it[0] == it[i]
       chain = quote:
-        `chain` and (it[0] == it[`i`])
+        `chain` and (it[0] == it[`i`]) # compare first element to all others
 
   delegate:
-    combinations(_) # all arguments of intersect are delegated to combinations
-    map(c.it)
+    # all arguments of intersect are delegated to combinations
+    combinations(_)
     filter(chain)
     map(it[0])
 
@@ -134,17 +133,16 @@ zf_inline removeDoubles():
 # remove double elements. Code taken from example "remove doublettes" below
   pre:
     let listRef = ext.listRef
-    let c = newIdentNode(zfCombinationsId)
   delegate:
     # this actually only works only on th eoriginal list / iterator
-    combinations(listRef) # combine with itself - all elements
+    indexedCombinations(listRef) # combine with itself - all elements
     # this is the tricky one: remove later elements that already are in the list
     # this actually translates in the inner for loop of combinations as:
-    # if c.idx[0] > c.idx[1] and c.it[0] == c.it[1]: break
-    takeWhile(not(c.it[0] == c.it[1] and c.idx[0] > c.idx[1])) 
+    # if idx[0] > idx[1] and it[0] == it[1]: break
+    takeWhile(not(it.elem[0] == it.elem[1] and it.idx[0] > it.idx[1])) 
     # go back to the original elements
-    filter(c.idx[0] == c.idx[1]) 
-    map(c.it[0])
+    filter(it.idx[0] == it.idx[1]) 
+    map(it.elem[0])
 
 proc inlineRemove*(ext: ExtNimNode) {.compileTime.} =
   ## remove function that removes elements from a collection
@@ -515,24 +513,24 @@ suite "valid chains":
     check((e --> map(it) --> to(seq[string])) == @["2.4", "4.8"])
     check((e --> map($it) --> to(seq)) == @["2.4", "4.8"])
     check((e --> map(it) --> to(seq)) == @["2.4", "4.8"])
-
+  
   test "combinations":
     ## get indices of items where the difference of the elements is 1
     let items = @[1,5,2,9,8,3,11]
     # ----------- 0 1 2 3 4 5 6
     proc abs1(a: int, b: int) : bool = abs(a-b) == 1 
     let b = items -->
-      combinations().
-      filter(abs1(c.it[0], c.it[1])).
-      map(c.idx) 
+      indexedCombinations().
+      filter(abs1(it.elem[0], it.elem[1])).
+      map(it.idx) 
     check(b == @[[0, 2], [2, 5], [3, 4]])
     check(b --> all(abs1(items[it[0]], items[it[1]])))
 
     # the same again, but store it to a new list
     let c = items -->
-      combinations().
-      filter(abs1(c.it[0], c.it[1])).
-      map(c.idx).
+      indexedCombinations().
+      filter(abs1(it.elem[0], it.elem[1])).
+      map(it.idx).
       to(list)
     
     # check that all items in the list and the seq are the same
@@ -541,11 +539,15 @@ suite "valid chains":
     # check that only `2` is in both `a` and `b`
     let both = a_array --> 
       combinations(b_array). # build combinations with b
-      map((it_a, it_b) = c.it). # define the iterators a it_a (from a) and it_b
+      map((it_a, it_b) = it). # define the iterators a it_a (from a) and it_b
       filter(it_a == it_b). # restrict to elements in both a and b
       map(it_a) # it is still ((it_a, it_b)) => restrict to it_a 
-    check (both == @[2])  
+    check (both == @[2])
 
+    # check indexedCombinations with 2 different collections
+    check([11,22] --> indexedCombinations([33,44]) == 
+      @[(idx: [0, 0], elem: [11, 33]), (idx: [0, 1], elem: [11, 44]), (idx: [1, 0], elem: [22, 33]), (idx: [1, 1], elem: [22, 44])])
+  
   test "rejected flatten":
     # some things are not possible or won't compile
     let fArray = [[1,2,3], [4,5,6]]
@@ -559,9 +561,9 @@ suite "valid chains":
     # comparison seq to array works now - but automatically converting to an array 
     # needs the array size to prevent a runtime error overwriting the bounds. 
     # reject(fArray --> flatten() --> to(array) == [1,2,3,4,5,6]) 
-    accept((fArray --> flatten() --> to(array[6,int])) == [1,2,3,4,5,6])
+    check((fArray --> flatten() --> to(array[6,int])) == [1,2,3,4,5,6])
     # if the array is too big, the array is filled with default zero
-    accept((fArray --> flatten() --> to(array[8,int])) == [1,2,3,4,5,6,0,0]) 
+    check((fArray --> flatten() --> to(array[8,int])) == [1,2,3,4,5,6,0,0]) 
     # if the array is too small we get a runtime error
 
     # list is flattened to seq by default
@@ -599,7 +601,8 @@ suite "valid chains":
     check(gg() --> map(parseInt(it)) --> map(1.5 * float(it))[2] == 4.5)
     check(a --> index(it == -4) + 1 == 3)
     check(@[@[1,2], @[3,4]] --> flatten() == @[1,2,3,4])
-    check(@[11,2,7,3,4] --> combinations() --> filter(abs(c.it[1]-c.it[0]) == 1) --> map(c.idx) == @[[1,3],[3,4]])
+    check(@[11,2,7,3,4] --> indexedCombinations() --> 
+      map((index,item) = it) --> filter(abs(item[1]-item[0]) == 1) --> map(index) == @[[1,3],[3,4]])
     check(@[1,2,3] --> map($it) --> to(list) is DoublyLinkedList[string])
   
   test "simple iterator":
@@ -627,8 +630,8 @@ suite "valid chains":
     accept(d --> to(seq) == @[2,4,6])
 
     reject(zip(si,si2) --> map($it) != nil, "need to provide an own implementation for mkIndexable(SimpleIter)") # zip also needs the [] operator
-    reject2(si --> combinations() --> all(c.it[0] < c.it[1]), "Only index with len types supported for combinations")
-    accept(d --> combinations() --> map(c.it) --> all(it[0] < it[1]))
+    reject2(si --> combinations() --> all(it[0] < it[1]), "Only index with len types supported for combinations")
+    accept(d --> combinations() --> all(it[0] < it[1]))
 
   test "zip with simpleIter":
     let si = initSimpleIter()
@@ -665,10 +668,10 @@ suite "valid chains":
 
   test "closure parameters":
     # x is an illegal capture - so this will be rejected
-    when not defined(js):
-      reject:
-        proc chkVarError(x: var seq[int], y: int): seq[int] =
-          result = x --> filter(it != y) 
+    # currently this is not detected as a `reject` - but still is rejected by the compiler
+    reject2:
+      proc chkVarError(x: var seq[int], y: int): seq[int] =
+        result = x --> filter(it != y) 
 
     proc chkVar(x: var seq[int], y: int): seq[int] =
       let x = x # assigning x to a constant will work
@@ -685,7 +688,7 @@ suite "valid chains":
       result = x --> map($it)
 
     var s = @[1,2,3]
-    check(chkVar(s, 2) == @[1,3]) # - strangely this doesn't work any more - seems to be a problem of defining an iterator in the anonymous function in a local function (?!)
+    check(chkVar(s, 2) == @[1,3])
     check(chkVarFor(s) == 6)
     check(chkConversion(s) == @["1","2","3"])
 
@@ -794,7 +797,6 @@ suite "valid chains":
 
     let intersect = 
       a() --> combinations(b,squaresPlusOne()). # combine all elements of a,b and squarePlusOne
-              map(c.it). # get the iterator contents of each combination (indices not relevant here)
               filter(it[0] == it[1] and it[0] == it[2]). # get all combinations where the elements of each collection are equal
               map(it[0]). # and use the first element
               to(seq[int]) # output type with a() on left side has to be supplied
@@ -803,16 +805,15 @@ suite "valid chains":
   ## Remove double entries from a collection. Could be used to extend `intersect`.
   test "complex function remove doublettes":
     let a = @[1,2,1,1,3,2,1,1,4]
-    check(a --> combinations(a). # combine with itself - all elements
+    check(a --> indexedCombinations(a). # combine with itself - all elements
               # this is the tricky one: remove later elements that already are in the list
               # this actually translates in the inner for loop of combinations as:
-              # if c.idx[0] > c.idx[1] and c.it[0] == c.it[1]: break
-              takeWhile(not(c.idx[0] > c.idx[1] and c.it[0] == c.it[1])). 
+              # if idx[0] > idx[1] and it[0] == it[1]: break
+              takeWhile(not(it.idx[0] > it.idx[1] and it.elem[0] == it.elem[1])). 
               # go back to the original elements
-              filter(c.idx[0] == c.idx[1]). 
-              map(c.it[0])  ==
+              filter(it.idx[0] == it.idx[1]). 
+              map(it.elem[0])  ==
                                @[1,2,3,4])
-
   ## Example that uses own extensions: `average`, `intersect`, `inc` and `filterNot`. 
   ## `intersect` uses the same implementation as in the previous test.
   test "register own extension":
@@ -967,7 +968,8 @@ suite "valid chains":
     check(x --> (it_x) --> exists(y --> (it_y) --> exists(it_x == it_y)))
     # alternative (maybe nicer to read) bracketing
     check((x --> it_x) --> exists((y --> it_y) --> exists(it_x == it_y)))
-    
+    check((a --> x) --> exists((b --> y) --> exists(x == y)))
+
     let b = x.zfun(a):
       exists:
         z.zfun(b):
