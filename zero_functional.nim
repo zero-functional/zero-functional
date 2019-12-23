@@ -5,8 +5,8 @@ const zfAccuVariableName* = "a"
 const zfIndexVariableName* = "idx"
 const zfListIteratorName* = "__itlist__"
 const zfMinHighVariableName* = "__minHigh__"
+const zfInternalHelperProc* = "__helperProc__"
 const zfInternalIteratorName* = "__autoIter__"
-const zfInternalIteratorProcName* = "__autoIterProc__"
 const zfIndexedElemName* = "elem"
 const zfIndexedIndexName* = "idx"
 
@@ -171,6 +171,11 @@ proc findNodeParents(node: NimNode, discriminator: proc (n: NimNode): bool): seq
     if res.len > 0 and (result.len == 0 or result.len > res.len + 1):
       result = res
       result.add(node)
+    
+proc findNodeParents(node: NimNode, kind: NimNodeKind, content: string = "") : seq[NimNode] =
+  proc discriminator(node: NimNode): bool =
+    return node.kind == kind and (content.len == 0 or content == node.label) 
+  return node.findNodeParents(discriminator)
 
 ## check if the discriminator function is valid for the node or one of its children (depth-first). 
 proc findNode(node: NimNode, discriminator: proc (n: NimNode): bool): NimNode =
@@ -583,7 +588,7 @@ proc replaceVarDefs(a: NimNode, quotedVars: var Table[string,string], preSection
   for b in a:
     if (a.kind == nnkVarSection or a.kind == nnkLetSection) and b.kind == nnkIdentDefs:
       let label = b[0].label
-      if label != "" and label != "idx" and label != "it":
+      if label != "" and label != zfIndexVariableName and label != zfIteratorVariableName:
         if not isPre and not (label in quotedVars):
           let labelNode = newIdentNode(label)
           if (b[1].kind == nnkIdent): # symbol name was explicitly given
@@ -1106,7 +1111,7 @@ proc findParentWithChildLabeled(node: NimNode, label: string): NimNode =
 ## Changing the list in-place is also supported.
 proc inlineForeach*(ext: ExtNimNode) {.compileTime.} =
   let isEq = ext.node[1].kind == nnkExprEqExpr
-  let hasIterator = isEq and (ext.node[1][0].findNode(nnkIdent, "it") != nil)
+  let hasIterator = isEq and (ext.node[1][0].findNode(nnkIdent, zfIteratorVariableName) != nil)
   var adaptedExpression = ext.adapt()
 
   # special case: assignment to iterator -> try to assign to outer list (if possible)
@@ -1434,7 +1439,7 @@ proc inlineSeq(ext: ExtNimNode) {.compileTime.} =
     # iterate over index
     ext.needsIndex = true
     ext.initials.add quote do:
-      `idxIdent` = low(`listRef`)
+      var `idxIdent` = low(`listRef`)
     ext.node = quote:
       while (`idxIdent` <= high(`listRef`)):
         let `itIdent` = `listRef`[`idxIdent`]
@@ -1668,12 +1673,14 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool, resultType: Res
   if isSeq and not isIter and (resType != nil or forceSeq):
     if not explicitType and (collType.find("[") != -1 or forceSeq):
       hasIter = true
-      let iterName = newIdentNode(zfInternalIteratorName)
+      let procName = newIdentNode(zfInternalHelperProc)
       itFun = quote:
-        proc `iterName`(): auto =
+        {.push hint[XDeclaredButNotUsed]: off.} 
+        proc `procName`(): auto =
           `loopDef` 
+        {.pop.} 
   
-      itDef = iterName
+      itDef = procName
 
   let resultIdent = newIdentNode("result")
   var autoProc = quote:
@@ -1748,15 +1755,13 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool, resultType: Res
     if hasIter:
       addLoop = addLoop.copyNimTree()
     # there should only be one yield statement - replace it with zfAddItem
-    proc isYield(node: NimNode) : bool = 
-      node.kind == nnkYieldStmt
-    let path = addLoop.findNodeParents(isYield)
+    let path = addLoop.findNodeParents(nnkYieldStmt)
     let itName = path[0][0]
     path[1].replace(path[0], ext.addElemResult(itName))
     code.add(addLoop)
 
     # in the proc replace the yield with result
-    let path2 = itFun.findNodeParents(isYield)
+    let path2 = itFun.findNodeParents(nnkYieldStmt)
     if path2.len > 1:
       # replace yield expression in proc with a result expression
       # the created proc is used later on only to determine the result type - not to actually call the proc
@@ -1898,7 +1903,7 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
     if isClosure:
       # create closure iterator that delegates to the inline iterator
       let inlineName = newIdentNode(iterName.label & "_inline")
-      let it = newIdentNode("it")
+      let it = newIdentNode(zfIteratorVariableName)
       iterNode = quote:
         iterator `inlineName`(): auto {.inline.} =
           nil
@@ -1912,7 +1917,6 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
 
   let isSeq = lastCall in SEQUENCE_HANDLERS
 
-  var defineIdxVar = (not hasMinHigh and not isIter and not td.startswith("Option[")) and isSeq
   var needsIndexVar = false
 
   if ((not isIter and (isSeq and (resultType.id.len > 0 and resultType.id.startswith("array") or
@@ -1991,32 +1995,13 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
 
     if newCode != nil:
       code = newCode
-    if not hasMinHigh and not defineIdxVar:
-      defineIdxVar = ext.needsIndex
   # end of loop
 
-  if not hasMinHigh and defineIdxVar:
-    let idxIdent = newIdentNode(zfIndexVariableName)
-    varDef.add quote do:
-      var `idxIdent` = 0
-
+  let idxIdent = newIdentNode(zfIndexVariableName)
+  
   # add the actual loop section
   init.add(codeStart)
-
-  # add the endLoop section
-  # could be combinations of for and while, but only one while (for list types)
-  var loopNode: NimNode = nil
-  if endLoop.len > 0 or (not hasMinHigh and defineIdxVar):
-    loopNode = if (td.isListType() or ext.forceIndexLoop): codeStart.findNode(nnkWhileStmt) else: codeStart.findNode(nnkForStmt)
-  if endLoop.len > 0:
-    assert(loopNode != nil)
-    loopNode.last.add(endLoop)
-  if loopNode != nil and not hasMinHigh and defineIdxVar:
-    # add index increment to end of the for loop
-    let idxIdent = newIdentNode(zfIndexVariableName)
-    loopNode.last.add quote do:
-      `idxIdent` += 1
-
+  
   # add the finals section
   if finals.len > 0:
     init.add(finals)
@@ -2038,6 +2023,7 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
       theProc = ext.createAutoProc(args, isSeq, resultType, td, init, index > 1, false)
     result = theProc
     code = result.last.getStmtList()
+
     if isIter:
       code = result.getStmtList()
       if isClosure:
@@ -2048,6 +2034,7 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
       code.add(init)
     elif not isSeq:
       code.insert(0,init)
+      
     if preInit.len > 0:
       code.insert(0, preInit)
     if ((not isIter) or toIter) and (not defined(js) or not toIter):
@@ -2063,6 +2050,43 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
     result = q
     code = q.getStmtList().add(init)
 
+  # add the endLoop section
+  # could be combinations of for and while, but only one while (for list types)
+  var loopPath: seq[NimNode] = @[]
+  var loopNode: NimNode = nil
+  var kind = nnkForStmt
+
+  if (td.isListType() or ext.forceIndexLoop): 
+    kind = nnkWhileStmt 
+  loopPath = result.findNodeParents(kind)
+  if loopPath.len > 0:
+    loopNode = loopPath[0]
+
+  if loopNode != nil: # and not hasMinHigh:
+    if endLoop.len > 0:
+      loopNode.last.add(endLoop)
+    
+    # add `var idx = 0` and `idx += 1` - in case of minHigh idx is already looped through
+    if not hasMinHigh:
+      let path = result.findNodeParents(nnkIdent, zfIndexVariableName)
+      if path.len > 0:
+        # add index increment to end of the for loop
+        loopNode.last.add quote do:
+          `idxIdent` += 1
+        # add idx definition if it is not already present 
+        if path.len > 1 and path[2].kind != nnkVarSection:
+          proc addIdx(path: seq[NimNode]) : bool =
+            result = path.len > 1
+            if result:
+              let q = quote:
+                var `idxIdent` = 0
+              path[1].insert(path[1].len - 1, q)
+
+          if loopPath.addIdx():
+            var procDefNode = result.findNode(nnkProcDef).findNode(nnkProcDef)
+            if procDefNode != nil:
+              discard procDefNode.findNodeParents(kind).addIdx()
+      
   if debug:
     echo ""
     echo debugInfo
@@ -2106,9 +2130,7 @@ proc delegateMacro(a: NimNode, b1:NimNode, td: string, debugInfo: string): NimNo
   var outer = b
   var path : seq[NimNode] = @[]
   if b.kind != nnkCall:
-    proc isCall(node: NimNode): bool =
-      return node.kind == nnkCall
-    path = outer.findNodeParents(isCall)
+    path = outer.findNodeParents(nnkCall)
     if path.len > 0:
       b = path[0]
     else:
