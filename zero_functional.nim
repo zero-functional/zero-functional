@@ -6,6 +6,7 @@ const zfIndexVariableName* = "idx"
 const zfListIteratorName* = "__itlist__"
 const zfMinHighVariableName* = "__minHigh__"
 const zfInternalIteratorName* = "__autoIter__"
+const zfInternalIteratorProcName* = "__autoIterProc__"
 const zfIndexedElemName* = "elem"
 const zfIndexedIndexName* = "idx"
 
@@ -19,10 +20,6 @@ const zfMaxTupleSize = 10
 
 # if set to true: turns on prints code generated with zf (for macros -->, zfun and connect)
 const debugAll = false
-
-# See bug https://github.com/nim-lang/Nim/issues/7787
-const hasIteratorBug = true
-const createProc = hasIteratorBug
 
 when defined(zf_iter):
   const defaultCollectionType = ""
@@ -77,17 +74,15 @@ type
     it*: array[A,T]
     idx*: array[A,int]
 
-# a few problems with concepts and T - but also pushing doesn't help
-{.push hint[XDeclaredButNotUsed]: off.}
 type
-  FiniteIndexable*[T] {.hint[XDeclaredButNotUsed]: off.} = concept a
+  FiniteIndexable*  = concept a
     a.low() is int
     a.high() is int
-    a[int] is T
+    a[int]
 
-  FiniteIndexableLen*[T] {.hint[XDeclaredButNotUsed]: off.} = concept a
+  FiniteIndexableLen* = concept a
     a.len() is int
-    a[int] is T
+    a[int]
 
   FiniteIndexableLenIter*[T] = concept a
     a.len() is int
@@ -108,7 +103,6 @@ type
     for it in a:
       it is T
     b.add(T)
-{.pop.}
 
 ## Contains all functions that may result in a sequence result. Elements are added automatically to SEQUENCE_HANDLERS
 var SEQUENCE_HANDLERS {.compileTime.} = [$Command.to].toHashSet()
@@ -155,27 +149,74 @@ proc zfAddSequenceHandlers*(seqHandlers: seq[string]) {.compileTime.} =
 proc zfAddSequenceHandlers*(seqHandlers: varargs[string]) {.compileTime.} =
   SEQUENCE_HANDLERS.incl(seqHandlers.toHashSet)
 
-## check if the discriminator function is valid for the node or one of its children (depth-first). 
-proc checkNode(node: NimNode, discriminator: proc (n: NimNode): bool): NimNode =
+## Shortcut and safe way to get the ident label of a node
+proc label(node: NimNode): string =
+  if node.kind == nnkCall or node.kind == nnkOpenSymChoice or node.kind == nnkObjConstr:
+    node[0].label
+  elif node.kind == nnkIdent or node.kind == nnkSym:
+    $node
+  else:
+    ""
+
+## Get the label of the current command.
+proc label*(ext: ExtNimNode): string =
+  ext.node.label
+
+proc findNodeParents(node: NimNode, discriminator: proc (n: NimNode): bool): seq[NimNode] =
+  result = @[]
   if (discriminator(node)):
-    return node
+    return @[node]
   for child in node:
-    let res = child.checkNode(discriminator)
-    if res != nil:
-      return res
-  return nil
+    let res = child.findNodeParents(discriminator)
+    if res.len > 0 and (result.len == 0 or result.len > res.len + 1):
+      result = res
+      result.add(node)
+
+## check if the discriminator function is valid for the node or one of its children (depth-first). 
+proc findNode(node: NimNode, discriminator: proc (n: NimNode): bool): NimNode =
+  result = nil
+  let res = node.findNodeParents(discriminator)
+  if res.len > 0:
+    result = res[0]
 
 proc findNode*(node: NimNode, kind: NimNodeKind, content: string = "") : NimNode =
   ## Find a node given its kind and - optionally - its content.
   proc hasNodeWithKind(node: NimNode): bool =
     result = (node.kind == kind and (content.len == 0 or content == $node))
-  return node.checkNode(hasNodeWithKind)
+  return node.findNode(hasNodeWithKind)
 
 proc findDefinition*(node: NimNode, label: string, kind = nnkLetSection): NimNode = 
   ## Find the definition of a constant or variable
   proc hasDefinition(node: NimNode): bool =
     result = (node.kind == kind and node.findNode(nnkIdent, label) != nil)
-  return node.checkNode(hasDefinition)
+  return node.findNode(hasDefinition)
+
+## Replace a given node by another in a specific parent
+proc replace(node: NimNode, searchNode: NimNode, replNode: NimNode) =
+  if node.len > 0:
+    for i in 0..<node.len:
+      let child = node[i]
+      if child.kind == searchNode.kind and child.label == searchNode.label:
+        node[i] = replNode
+      else:
+        child.replace(searchNode, replNode)
+
+## Helper that gets nnkStmtList and removes a 'nil' inside it - if present.
+## The nil is used as placeholder for further added code.
+proc getStmtList*(node: NimNode, removeNil = true): NimNode =
+  var child = node
+  while child.len > 0:
+    child = child.last
+    if child.kind == nnkStmtList:
+      if removeNil and child.len > 0 and child.last.kind == nnkNilLit:
+        child.del(child.len-1)
+      else:
+        let sub = child.getStmtList()
+        if sub != nil:
+          return sub
+      return child
+  return nil
+
 
 macro idents(args: varargs[untyped]): untyped =
   ### shortcut implementation
@@ -320,12 +361,12 @@ iterator items*[T: tuple](a:T) : auto =
     yield i
 
 ## iterate over concept FiniteIndexable
-iterator items*[T](f: FiniteIndexable[T]) : T =
+iterator items*[T: FiniteIndexable](f: T) : auto =
   for i in f.low()..f.high():
     yield f[i]
 
-## iterate over concept FiniteIndexable
-iterator items*[T](f: FiniteIndexableLen[T]) : T =
+## iterate over concept FiniteIndexableLen
+iterator items*[T: FiniteIndexableLen](f: T) : auto =
   for i in 0..<f.len():
     yield f[i]
 
@@ -397,69 +438,6 @@ macro genZfAddItemTuple(maxTupleSize: static[int]): untyped =
 genZfAddItemTuple(zfMaxTupleSize)
 
 {.pop.}
-
-## Shortcut and safe way to get the ident label of a node
-proc label(node: NimNode): string =
-  if node.kind == nnkCall or node.kind == nnkOpenSymChoice or node.kind == nnkObjConstr:
-    node[0].label
-  elif node.kind == nnkIdent or node.kind == nnkSym:
-    $node
-  else:
-    ""
-
-## Get the label of the current command.
-proc label*(ext: ExtNimNode): string =
-  ext.node.label
-
-## Replace the given identifier by the string expression
-proc replace(node: NimNode, searchNode: NimNode, replNode: NimNode): NimNode =
-  result = node
-  if node.len > 0:
-    for i in 0..<node.len:
-      let child = node[i]
-      if child.kind == searchNode.kind and child.label == searchNode.label:
-        node[i] = replNode
-      else:
-        node[i] = child.replace(searchNode, replNode)
-  elif node.kind == searchNode.kind and node.label == searchNode.label:
-    result = replNode
-
-## Searches for a given node type and returns the node and its path (indices) in the given root node.
-## Search type is breadth first.
-proc findNodePath(node: NimNode, kind: NimNodeKind, content: string = "") : (NimNode,seq[int]) =
-  result = (nil, @[])
-  for i,child in node:
-    if child.kind == kind and (content.len == 0 or content == $node):
-      return (child,@[i])
-    let res = child.findNodePath(kind, content)
-    if (res[0] != nil) and ((result[1].len == 0) or (result[1].len > res[1].len + 1)):
-      result[0] = res[0] # the found node
-      result[1] = @[i]   # index in current node
-      result[1].add(res[1]) # add the children's indices at the end
-
-## insert the new node with the given path
-proc apply(node: NimNode, path: seq[int], newNode: NimNode): NimNode =
-  var c = node
-  for idx in 0..path.len-2:
-    c = c[path[idx]]
-  c[path[path.len-1]] = newNode
-  result = node
-
-## Helper that gets nnkStmtList and removes a 'nil' inside it - if present.
-## The nil is used as placeholder for further added code.
-proc getStmtList*(node: NimNode, removeNil = true): NimNode =
-  var child = node
-  while child.len > 0:
-    child = child.last
-    if child.kind == nnkStmtList:
-      if removeNil and child.len > 0 and child.last.kind == nnkNilLit:
-        child.del(child.len-1)
-      else:
-        let sub = child.getStmtList()
-        if sub != nil:
-          return sub
-      return child
-  return nil
 
 proc mkItNode*(index: int) : NimNode {.compileTime.} =
   newIdentNode(internalIteratorName & ("$1" % $index))
@@ -1676,40 +1654,7 @@ proc getResType(resultType: ResultType, td: string): (NimNode, bool) {.compileTi
         `res`[int] # this is actually a dummy type
     result = (q, false)
 
-macro iteratorTypeTd(td: typedesc): untyped =
-  let kind = td.getType[1][1].kind
-  if kind == nnkBracketExpr and td.getType[1][1][0].kind == nnkSym and td.getType[1][1][0].repr == "array" and td.getType[1][1][1].kind == nnkBracketExpr and td.getType[1][1][1][0].repr == "range":
-    # special handling for ranges (in arrays)
-    let f = td.getType[1][1][1][1]
-    let t = td.getType[1][1][1][2]
-    let tpe = td.getType[1][1][2]
-    result = quote:
-      array[`f`..`t`, `tpe`]
-  elif kind == nnkBracketExpr:
-    # special handling for tuples
-    result = newPar()
-    for i in 1..td.getType[1][1].len-1:
-      result.add(td.getType[1][1][i])
-  elif kind == nnkEnumTy:
-    result = td.getTypeInst[1][0][0]
-  else:
-    result = td.getType[1][1]
-
-macro iteratorType*(td: untyped): untyped =
-  quote:
-    iteratorTypeTd(`td`.type)
-    
-proc createIteratorFunction(args: NimNode): NimNode =
-  let iterName = newIdentNode(zfInternalIteratorName)
-  if createProc:
-    result = quote:
-      proc `iterName`(): auto =
-        nil
-  else:
-    result = quote:
-      iterator `iterName`(): auto =
-        nil
-
+  
 ## Creates the function that returns the final result of all combined commands.
 ## The result type depends on map, zip or flatten calls. It may be set by the user explicitly using to(...)
 proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool, resultType: ResultType, td: string, loopDef: NimNode, forceSeq: bool, isIter: bool): NimNode =
@@ -1723,9 +1668,12 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool, resultType: Res
   if isSeq and not isIter and (resType != nil or forceSeq):
     if not explicitType and (collType.find("[") != -1 or forceSeq):
       hasIter = true
-      itFun = args.createIteratorFunction()
-      itFun.getStmtList().add(loopDef)
-      itDef = itFun[0]
+      let iterName = newIdentNode(zfInternalIteratorName)
+      itFun = quote:
+        proc `iterName`(): auto =
+          `loopDef` 
+  
+      itDef = iterName
 
   let resultIdent = newIdentNode("result")
   var autoProc = quote:
@@ -1758,20 +1706,12 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool, resultType: Res
       collType = collType[0..i-1]
       let collSym = parseExpr(collType)
       let resDef =
-        if createProc:
-          if collType == "array":
-            quote:
-              array[`listRef`.len, type(`itDef`())]
-          else:
-            quote:
-              `collSym`[type(`itDef`())] 
-        else: 
-          if collType == "array":
-            quote:
-              array[`listRef`.len, iteratorType(`itDef`)]
-          else:
-            quote:
-              `collSym`[iteratorType(`itDef`)]
+        if collType == "array":
+          quote:
+            array[`listRef`.len, type(`itDef`())]
+        else:
+          quote:
+            `collSym`[type(`itDef`())]
       code = quote:
         var res: `resDef`
         `resultIdent` = zfInit(res)
@@ -1786,54 +1726,44 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool, resultType: Res
       for _ in 1..num:
         init[1].add(x)
       code = quote:
-        var `x`: iteratorType(`itDef`)
+        var `x`: type(`itDef`())
         `init`
 
     elif forceSeq and hasIter:
       let coll = newIdentNode(defaultCollectionType)
-      if createProc:
-        code = quote:
-          var res: `coll`[type(`itDef`())]
-          `resultIdent` = zfInit(res)
-      else:
-        code = quote:
-          var res: `coll`[iteratorType(`itDef`)]
-          `resultIdent` = zfInit(res)
+      code = quote:
+        var res: `coll`[type(`itDef`())]
+        `resultIdent` = zfInit(res)
+
     else:
       # use the same type as in the original list
       code = nnkStmtList.newTree().add quote do:
         `resultIdent` = zfInit(`listRef`)
 
   if isSeq:
-    let idx = newIdentNode(zfIndexVariableName)
     # unfortunatly it does not (yet) work in Nim to define iterators anywhere in Nim and get a result from it
     # so defining an iterator inside an anonymous proc (this generated one) - inside another proc - yields no results
     # so we copy everything - this is also a tad more efficient for the running code in the end...
-    if hasIteratorBug or not hasIter:
-      var addLoop = loopDef.findNode(nnkStmtList)
-      if hasIter:
-        addLoop = addLoop.copyNimTree()
-      # there should only be one yield statement - replace it with zfAddItem
-      let (yieldStmt,path) = addLoop.findNodePath(nnkYieldStmt)
-      code.add(addLoop.apply(path, ext.addElemResult(yieldStmt[0])))
-      # due to a further bug in nim we now replace the iterator with an actual proc
-      if createProc and hasIter:
-        let yield2 = loopDef.findNode(nnkYieldStmt)
-        if yield2 != nil:
-          # replace yield expression in proc with a result expression
-          # the created proc is used later on only to determine the result type - not to actually call the proc
-          let resultIdent = newIdentNode("result")
-          let yieldResult = yield2[0]
-          let ret2 = quote:
-            `resultIdent` = `yieldResult`
-          discard loopDef.replace(yield2, ret2)
-    else:
-      let it = newIdentNode(internalIteratorName)
-      code.add quote do:
-        var `idx` = 0
-        for `it` in `itDef`():
-          zfAddItem(`resultIdent`, `idx`, `it`)
-          `idx` += 1
+    var addLoop = loopDef.findNode(nnkStmtList)
+    if hasIter:
+      addLoop = addLoop.copyNimTree()
+    # there should only be one yield statement - replace it with zfAddItem
+    proc isYield(node: NimNode) : bool = 
+      node.kind == nnkYieldStmt
+    let path = addLoop.findNodeParents(isYield)
+    let itName = path[0][0]
+    path[1].replace(path[0], ext.addElemResult(itName))
+    code.add(addLoop)
+
+    # in the proc replace the yield with result
+    let path2 = itFun.findNodeParents(isYield)
+    if path2.len > 1:
+      # replace yield expression in proc with a result expression
+      # the created proc is used later on only to determine the result type - not to actually call the proc
+      let set_result = quote:
+        `resultIdent` = `itName`
+      # within parent replace yield with result = it
+      path2[1].replace(path2[0], set_result)
 
   # no sequence output:
   # we do _not_ need to initialize the resulting list type here
@@ -1982,7 +1912,7 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
 
   let isSeq = lastCall in SEQUENCE_HANDLERS
 
-  var defineIdxVar = (not hasMinHigh and not isIter and not td.startswith("Option[")) and (isSeq and hasIteratorBug)
+  var defineIdxVar = (not hasMinHigh and not isIter and not td.startswith("Option[")) and isSeq
   var needsIndexVar = false
 
   if ((not isIter and (isSeq and (resultType.id.len > 0 and resultType.id.startswith("array") or
@@ -2097,6 +2027,7 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
     if isIter:
       if toIter: # used with to(iter)
         idents(resultIdent("result"))
+
         theProc = quote:
           (proc(): auto =
             `iterNode`
@@ -2149,7 +2080,7 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
         echo "#   " & orig[i].repr
         i += 1
 
-    echo(repr(result).replace("__", ""))
+    echo(repr(result).replace("`gensym", "_").replace("__", ""))
     # for the whole tree do (but this could crash):
     # echo(treeRepr(result))
 
@@ -2173,12 +2104,13 @@ proc delegateMacro(a: NimNode, b1:NimNode, td: string, debugInfo: string): NimNo
   # we search for the actual call, do the macro expansions on the call and
   # add the result back into the tree later
   var outer = b
-  var path : seq[int] = @[]
+  var path : seq[NimNode] = @[]
   if b.kind != nnkCall:
-    var call : NimNode
-    (call,path) = outer.findNodePath(nnkCall)
-    if call != nil:
-      b = call
+    proc isCall(node: NimNode): bool =
+      return node.kind == nnkCall
+    path = outer.findNodeParents(isCall)
+    if path.len > 0:
+      b = path[0]
     else:
       if outer.kind == nnkIdent:
         # shortcut syntax for iterator definition - handle later
@@ -2220,9 +2152,10 @@ proc delegateMacro(a: NimNode, b1:NimNode, td: string, debugInfo: string): NimNo
     args.add(it)
   result = iterHandler(args, td, debugInfo)
 
-  if path.len > 0: # insert the result back into the original tree
-    result = outer.apply(path, result)
-
+  if path.len > 1: # insert the result back into the original tree
+    path[1].replace(path[0], result)
+    result = path[^1] # upper most parent
+  
 ## delegate call to get the type information.
 macro delegateArrow(td: typedesc, a: untyped, b: untyped, debugInfo: untyped): untyped =
   result = delegateMacro(a, b, getTypeInfo(td.getType[1], td.getTypeInst[1]), debugInfo.repr[1..^2])
@@ -2301,7 +2234,7 @@ macro `-->`*(a: untyped, b: untyped): untyped =
         delegateArrow(type(`a`), `a`, `b2`, `l`)
   else:
     result = delegateMacro(a, b2, "seq", l)
-
+  
 ## use this macro for debugging - will output the created code
 macro `-->>`*(a: untyped, b: untyped): untyped =
   let (a,b2,_) = checkArrow(a,b)
@@ -2311,5 +2244,3 @@ macro `-->>`*(a: untyped, b: untyped): untyped =
       delegateArrow(type(`a`), `a`, `b2`, `l`)
   else:
     result = delegateMacro(a, b2, "seq", l)
-
-  
