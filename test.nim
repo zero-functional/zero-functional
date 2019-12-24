@@ -83,13 +83,13 @@ zf_inline inc(add=1):
 
 ## Own implementation of filterNot(cond) command which is basically the opposite of filter.
 ## We try to implement it not refering to filter - just to show how an if condition is handled.
-## The resulting generated node contains a nil statement which is used by the caller to insert
+## The resulting generated node contains a yield statement which is used by the caller to insert
 ## the next commands in the chain.
 zf_inline filterNot(condition: bool):
   loop:
     if not condition:
-      nil
-  # the nil statement marks the position where the next commands' code will be inserted.
+      yield it
+  # the yield statement marks the position where the next commands' code will be inserted.
 
 ## Own implementation of average command which calculates the arithmetic mean of 
 ## sum / count - where count is the number of items and sum is the sum of all items.
@@ -134,7 +134,7 @@ zf_inline removeDoubles():
   pre:
     let listRef = ext.listRef
   delegate:
-    # this actually only works only on th eoriginal list / iterator
+    # this actually only works only on the original list / iterator
     indexedCombinations(listRef) # combine with itself - all elements
     # this is the tricky one: remove later elements that already are in the list
     # this actually translates in the inner for loop of combinations as:
@@ -629,7 +629,7 @@ suite "valid chains":
     accept(d --> to(seq) == @[2,4,6])
 
     reject(zip(si,si2) --> map($it) != nil, "need to provide an own implementation for mkIndexable(SimpleIter)") # zip also needs the [] operator
-    reject2(si --> combinations() --> all(it[0] < it[1]), "Only index with len types supported for combinations")
+    reject(si --> combinations() --> all(it[0] < it[1]), "Only index with len types supported for combinations")
     accept(d --> combinations() --> all(it[0] < it[1]))
 
   test "zip with simpleIter":

@@ -500,9 +500,7 @@ errorLines() --> foreach(echo it)
 
 ## Extending zero-functional
 
-*This feature is still experimental.*
-
-Extending zero-functional with own functions is probably more complicated than with other fp-libraries as the functions have to be implemented with macros producing imperative code. 
+Extending zero-functional with own functions is probably more complicated than with other fp-libraries as the functions have to be implemented with macros producing inlined imperative code. 
 Some good examples - 2 very basic and 2 more complicated - can be found in [test.nim: registerExtension](test.nim) and also in the source code of [zero-functional](zero-functional.nim)
 
 Example - implement the (simple) map function:
@@ -513,6 +511,7 @@ zf_inline map(f):
 ```
 
 `zf_inline` is the actual macro that takes the created function name (here: `map`) and its parameters and a body with different sections as input.
+`zf_inline_dbg` will print the generated code `proc inlineMap` (see below).
 
 The sections directly map to their counterparts in `ExtNimNode`:
 - `pre` prepare section: initialize variables and constants 
@@ -568,6 +567,7 @@ Special variables for `zf_inline` statements are:
 - `result`: the overall result and return type of the operation
 All other variables have to be defined in the `pre`-section, also when automatically assigned, e.g. when overriding the `idx` variable or when accessing a reference to the list as `listRef`.
 See `intersect` or `removeDoubles` implementation in [test.nim](test.nim) as an example.
+- `yield it`: opposed to setting the result this means that an iterator or a collection result is returned with `it` being added to it.
 
 The manual `inline`-implementations should follow certain rules. 
 - `ext: ExtNimNode` as parameter
@@ -629,10 +629,10 @@ The result type depends on the function used as last parameter.
 
 ## Debugging using `-->>`
 
-As `zero_functional` is still work in progress and macros are still kind of experimental in Nim, it can happen that the compiler crashes or that compile errors are hard to understand.
+As `zero_functional` macros are sometimes tricky to use, it can happen that the compiler crashes or that compile errors are hard to understand.
 
 To see the actual code that is generated (provided the generation itself does not crash) you can use the `-->>` operator which prints the representation `repr` of the actual generated nim code.
-It is also useful for checking what the expression is generating under the hood.
+It is also useful for checking what the macros are generating under the hood.
 
 ```nim
 let a = [1,2,3]
@@ -642,12 +642,10 @@ a -->> foreach(echo(it))
 will print during compilation:
 ```nim
 block:
-  for __it__0 in a:
-    echo(__it__0)
+  for it0 in a:
+    echo(it0)
 ```
-
 The printed code can be copied to your actual program for further investigation.
-Remember to remove the dunder (double-underscores) of the generated variables before compiling the generated code and watch out for name-clashes with your own code.
 
 ## Compile flags
 
