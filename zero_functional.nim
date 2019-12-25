@@ -2333,7 +2333,3 @@ macro `-->>`*(a: untyped, b: untyped): untyped =
       delegateArrow(type(`a`), `a`, `b2`, `l`)
   else:
     result = delegateMacro(a, b2, "seq", l)
-
-when isMainModule:
-  let a = [1,2,3]
-  a -->> foreach(echo(it))

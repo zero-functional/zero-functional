@@ -1,9 +1,64 @@
+
 # zero-functional
 
 [![Build Status](https://travis-ci.org/zero-functional/zero-functional.svg?branch=master)](https://travis-ci.org/zero-functional/zero-functional)
 
 A library providing (almost) zero-cost chaining for functional abstractions in Nim.
 
+
+Table of Contents
+=================
+
+   * [zero-functional](#zero-functional)
+      * [Initial Example](#initial-example)
+      * [Installation](#installation)
+      * [Rationale](#rationale)
+      * [Variable names](#variable-names)
+      * [Seq and arrays](#seq-and-arrays)
+      * [Other types](#other-types)
+      * [Supported methods](#supported-methods)
+         * [map](#map)
+         * [filter](#filter)
+         * [zip](#zip)
+         * [split](#split)
+         * [exists](#exists)
+         * [all](#all)
+         * [index](#index)
+         * [indexedMap](#indexedmap)
+         * [fold](#fold)
+         * [reduce](#reduce)
+            * [max](#max)
+            * [min](#min)
+            * [product](#product)
+            * [sum](#sum)
+         * [indexedReduce](#indexedreduce)
+         * [foreach](#foreach)
+            * [changing in-place](#changing-in-place)
+         * [sub](#sub)
+            * [drop](#drop)
+            * [dropWhile](#dropwhile)
+            * [take](#take)
+            * [takeWhile](#takewhile)
+         * [flatten](#flatten)
+            * [indexedFlatten](#indexedflatten)
+         * [combinations](#combinations)
+            * [indexedCombinations](#indexedcombinations)
+         * [to](#to)
+            * [createIter](#createiter)
+      * [Extending zero-functional](#extending-zero-functional)
+         * [Writing extensions with Zero-DSL](#writing-extensions-with-zero-dsl)
+            * [Special variables](#special-variables)
+            * [Setting the result](#setting-the-result)
+         * [Extending with plain nim](#extending-with-plain-nim)
+            * [Defering to Zero-DSL inside plain nim](#defering-to-zero-dsl-inside-plain-nim)
+            * [Creating compound commands with other commands](#creating-compound-commands-with-other-commands)
+      * [Overview Table](#overview-table)
+      * [Debugging using --&gt;&gt;](#debugging-using---)
+      * [Compile flags](#compile-flags)
+         * [LICENSE](#license)
+         * [Contributors](#contributors)
+
+## Initial Example
 The example:
 
 ```nim
@@ -447,7 +502,7 @@ check(@[1,2,3] --> combinations(@[1,2,3]) == @[[1,1],[1,2],[1,3],[2,1],[2,2],[2,
 check(@[1,2,3] --> combinations(@[4,5]) == @[[1,4],[1,5],[2,4],[2,5],[3,4],[3,5]])
 ```
 
-### indexedCombinations
+#### indexedCombinations
 
 Same as `combinations` with the additional indices of the resulting combined elements. The resulting iterator is a named tuple with the combined elements and their indices `(idx: [idx1, idx2], elem: [combined_element1, combined_element2])`.
 ```nim
@@ -482,7 +537,7 @@ check(@[@[1u8, 2u8], @[3u8]] --> map(it --> to(seq[int],true)) --> to(seq[seq[in
 * the parameter `true` is necessary to suppress a warning that the conversion is done by casting (each element)
 * the final result is a `seq[seq[int]]` - this conversion is optional (maybe to document) and can be determined automatically.
 
-### createIter
+#### createIter
 
 When using `createIter(name:string,closure:bool=false)` as last function then an iterator `name` is created which can be used for further processing with zero-functional with only a small overhead.
 Similar to `to` this is also a virtual function which is internally replaced and only used to check the output type.
@@ -503,6 +558,7 @@ errorLines() --> foreach(echo it)
 Extending zero-functional with own functions is probably more complicated than with other fp-libraries as the functions have to be implemented with macros producing inlined imperative code. 
 Some good examples - 2 very basic and 2 more complicated - can be found in [test.nim: registerExtension](test.nim) and also in the source code of [zero-functional](zero-functional.nim)
 
+### Writing extensions with Zero-DSL
 Example - implement the (simple) map function:
 ```nim
 zf_inline map(f):
@@ -561,6 +617,7 @@ zf_inline index(cond: bool):
 The `cond: bool` definition adds additional compile time checks to the generated macros, so that when using the `index`-function with a different type than `bool` a compile error with the wrong parameter and the expected type is created.
 In this example also the `idx` variable is replaced automatically with the running index that is increment during the loop.
 
+#### Special variables
 Special variables for `zf_inline` statements are:
 - `it`: when used is the previous iterator, when defined with `let it = ` creates a new iterator
 - `idx`: the running index in the loop
@@ -569,10 +626,44 @@ All other variables have to be defined in the `pre`-section, also when automatic
 See `intersect` or `removeDoubles` implementation in [test.nim](test.nim) as an example.
 - `yield it`: opposed to setting the result this means that an iterator or a collection result is returned with `it` being added to it.
 
-The manual `inline`-implementations should follow certain rules. 
+#### Setting the result
+Example of `count` that sets a result:
+```nim
+zf_inline count():
+  init:
+    result = 0
+  loop:
+    result += 1 # add one in each loop
+```
+Functions that set a result in any section are considered final functions - no other function may follow. Opposed to using `yield` used for iterator results:
+
+Example of `filter` that returns a collection / iterator:
+```nim
+zf_inline filter(cond: bool):
+  loop:
+    if cond:
+      yield it # add the current iterator to the resulting collection
+```
+
+### Extending with plain nim
+When adding your own `foo` implementation you can write your own `inlineFoo` proc and register it with zero_functional. It should look like this:
+```nim
+proc inlineFoo*(ext: ExtNimNode) {.compileTime.} =
+  # do some parameter checks
+  if ext.node.len > SOME_MAX:
+    zfFail("too many arguments in \'$1\', got $2 but expected only $3" %
+        [ext.node.repr, $(ext.node.len - 1), $SOME_MAX])
+  # do some stuff
+  # ...
+  # the actual 'loop' section code
+  ext.node = quote:
+    # do something
+```
+
+The vanilla `inline`-proc implementations should follow certain rules. 
 - `ext: ExtNimNode` as parameter
 - ExtNimNode should be used when implementing the functions with some helpers:
-  - `ext.node` = place here the actual code being generated inside the current block 
+  - `ext.node` = place the actual code here that is being generated inside the current block 
 	initially `ext.node` contains the current function call and its parameters (section: loop)
   - `ext.initials` = add the initialization code for variable definitions (section: init)
   - `ext.endLoop` = add code that can be inserted at the end of the loop (section: end)
@@ -586,16 +677,41 @@ The manual `inline`-implementations should follow certain rules.
 - functions that create another sequence have to be registered with `zfAddSequenceHandlers`
 - finally call `zfCreateExtension` after all `zf_inline...` definitions and `zfAddFunction` calls - before using the actual function implementation
 
-Example of `count` that sets a result:
+#### Defering to Zero-DSL inside plain nim
+As Zero-DSL is limited in its expressiveness - e.g. there is no possibility to defer to a different loop implementation depending on the input type - it is possible to defer to different Zero-DSL implementations in the nim code using `zf_inline_call`. Example calling two implementations - one specialized to work on lists, the other for sequences:
 ```nim
-zf_inline count():
-  init:
-    result = 0
-  loop:
-    result += 1 # add one in each loop
-```
-Functions that set a result in any section are considered final functions - no other function may follow.
+proc inlineFoo*(ext: ExtNimNode) {.compileTime.} =
+  if ext.isListType():
+    # provide list implementation
+    zf_inline_call foo(param):
+      ... 
 
+  else:
+    # provide plain implementation (e.g. using [])
+    zf_inline_call reduce(op):
+      ...
+```
+
+#### Creating compound commands with other commands
+Zero-DSL can create commands as a sequence from already existing commands using the `delegate` section - which essentially calls the functions in that section.
+Example is the `removeDoubles` function that returns the input sequence with unique elements. See code in [test.nim](test.nim).
+```nim
+zf_inline removeDoubles():
+# remove double elements. 
+  pre:
+    # initialize variables in `ext` that are used below
+    let listRef = ext.listRef
+  delegate:
+    # this actually only works only on the original list / iterator
+    indexedCombinations(listRef) # combine with itself - all elements
+    # this is the tricky one: remove later elements that already are in the list
+    # this actually translates in the inner for loop of combinations as:
+    # if idx[0] > idx[1] and it[0] == it[1]: break
+    takeWhile(not(it.elem[0] == it.elem[1] and it.idx[0] > it.idx[1])) 
+    # go back to the original elements
+    filter(it.idx[0] == it.idx[1]) 
+    map(it.elem[0])
+```
 
 
 ## Overview Table
