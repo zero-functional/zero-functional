@@ -43,6 +43,7 @@ Table of Contents
             * [indexedFlatten](#indexedflatten)
          * [combinations](#combinations)
             * [indexedCombinations](#indexedcombinations)
+         * [concat](#concat)
          * [to](#to)
             * [createIter](#createiter)
       * [Extending zero-functional](#extending-zero-functional)
@@ -55,8 +56,8 @@ Table of Contents
       * [Overview Table](#overview-table)
       * [Debugging using --&gt;&gt;](#debugging-using---)
       * [Compile flags](#compile-flags)
-         * [LICENSE](#license)
-         * [Contributors](#contributors)
+      * [LICENSE](#license)
+      * [Contributors](#contributors)
 
 ## Initial Example
 The example:
@@ -511,6 +512,17 @@ check(@[11,2,7,3,4] --> indexedCombinations() --> filter(abs(it.elem[1]-it.elem[
 #          ^   ^ ^
 ```
 
+### concat
+
+Concatenates the given arguments to one iterator. Can only be used as first command preceeding `-->`.
+```nim
+check(concat([1,2],[3,4]) --> to(seq) == @[1,2,3,4])
+```
+Alternatively `zf_concat` can be used to create an iterator that concatenates the given iterators to one.
+```
+zf_concat(con, @[1], (2,3,4))
+check(con() --> to(seq) == @[1,2,3,4])
+```
 
 ### to
 
@@ -722,6 +734,7 @@ The result type depends on the function used as last parameter.
 | ------------- | --------- | ---------- | ---------- | --------------------------- |
 |all            |           |            |     +      | `bool`                      |
 |combinations   |   +       |    (+)     |    (+)     | `coll[Combination]`         |
+|concat         |   +       |            |            | coll                        |
 |exists         |           |            |     +      | bool                        |
 |filter         |   +       |     +      |     +      | part coll / zeroed array    |
 |find           |           |            |     +      | `int`                       |
@@ -766,15 +779,16 @@ The printed code can be copied to your actual program for further investigation.
 ## Compile flags
 
 The following compile flags are supported:
-* -d:zf_iter defaults to generating closure iterators instead of `seq` outputs.
-* -d:zf_list same as above but generating `DoublyLinkedList`
+* `-d:zf_iter` defaults to generating closure iterators instead of `seq` outputs.
+* `-d:zf_list` same as above but generating `DoublyLinkedList`
+* `-d:zf_debug_all` print all generated code
 
-### LICENSE
+## LICENSE
 
 MIT, Alexander Ivanov
 
 
-### Contributors
+## Contributors
 
 Co-maintainers and authors: [Michael Schulte](https://github.com/michael72), Alexander Ivanov
 

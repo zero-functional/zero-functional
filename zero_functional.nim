@@ -20,9 +20,14 @@ const internalAccuName = if (useInternalAccu): "__" & zfAccuVariableName &
 const zfMaxTupleSize = 10
 
 # if set to true: turns on prints code generated with zf (for macros -->, zfun and connect)
-const debugAll = false
+when defined(zf_debug_all):
+  const debugAll = true
+else:
+  const debugAll = false
 
-when defined(zf_iter):
+when defined(zf_iter) and defined(js):
+  warning("Iterator result not supported for JS backend")
+when defined(zf_iter) and not defined(js):
   const defaultCollectionType = ""
   const defaultResultType = "iter"
 else:
@@ -37,8 +42,8 @@ type
   Command* {.pure.} = enum
     ## All available commands.
     ## 'to' - is a virtual command
-    all, combinations, count, createIter, drop, dropWhile, exists, filter, find,
-        flatten, fold, foreach,
+    all, combinations, concat, count, createIter, drop, dropWhile, exists,
+        filter, find, flatten, fold, foreach,
     index, indexedCombinations, indexedFlatten, indexedMap, indexedReduce, map,
         reduce, sub, zip, take, takeWhile, to, uniq
 
@@ -209,7 +214,8 @@ proc replace(node: NimNode, searchNode: NimNode, replNode: NimNode) =
   if node.len > 0:
     for i in 0..<node.len:
       let child = node[i]
-      if child.kind == searchNode.kind and child.label == searchNode.label:
+      if child.kind == searchNode.kind and (child == searchNode or
+          child.repr == searchNode.repr):
         node[i] = replNode
       else:
         child.replace(searchNode, replNode)
@@ -1922,7 +1928,7 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
   var resultType = args.checkTo(td)
   let preInit = args.replaceZip() # zip is replaced with map + filter
   let hasMinHigh = preInit.len > 0
-  let lastCall = args.last[0].label
+  let lastCall = if args.last.kind == nnkIdent: args.last.label else: args.last[0].label
   let toIter = resultType.id == "iter" or (resultType.id.len == 0 and defined(zf_iter))
   if toIter and defined(js):
     resultType.id = ""
@@ -2221,10 +2227,8 @@ proc delegateMacro(a: NimNode, b1: NimNode, td: string,
         for z in 1..<node.len:
           m.head.value.add(node[z])
         node = node[0][0] # go down in the tree
-    elif node[0].kind == nnkIdent:
-      m.prepend(node)
-      break
     else:
+      m.prepend(node)
       break
 
   let args = nnkArgList.newTree()
@@ -2233,6 +2237,7 @@ proc delegateMacro(a: NimNode, b1: NimNode, td: string,
     args.add(nnkArgList.newTree(a[0][1])).add(newPar(a[0][2]))
   else:
     args.add(a)
+
   for it in m:
     args.add(it)
   result = iterHandler(args, td, debugInfo)
@@ -2310,26 +2315,57 @@ macro zfunDbg*(a: untyped, b: untyped, c: untyped): untyped =
   result = quote:
     zfunCall(type(`a`), true, `a`, `c`)
 
+macro zf_concat*(name: untyped, iterables: varargs[untyped]): untyped =
+  result = quote:
+    iterator `name`(): auto {.inline.} =
+      nil
+  let params = result.findNode(nnkFormalParams)
+  let code = result.getStmtList()
+  var idx = 0
+  for p in iterables:
+    let param_name = genSym(nskParam, "p" & $idx)
+    params.add(newIdentDefs(param_name, newCall("type", p), p))
+    code.add quote do:
+      for it in `param_name`:
+        yield it
+    idx += 1
+
+macro call_concat(a: untyped, b: untyped, dbg: untyped): untyped =
+  # create an iterator over all supplied items and call that
+  let concat_iter = gensym(nskIterator, "concat")
+  let concat_call = quote:
+    zf_concat(`concat_iter`)
+  let a2 = quote:
+    `concat_iter`()
+  for call in [concat_call, a2]:
+    for idx in 1..a.len-1:
+      call.add(a[idx])
+  result = quote:
+    `concat_call`
+    delegateArrow(type(`a2`), `a2`, `b`, `dbg`)
+
+macro arrowCall(a: untyped, b: untyped, dbg: untyped): untyped =
+  case a.label:
+    of $Command.concat:
+      result = quote:
+        call_concat(`a`, `b`, `dbg`)
+    of $Command.zip:
+      result = delegateMacro(a, b, defaultCollectionType, $dbg)
+    else:
+      result = quote:
+        delegateArrow(type(`a`), `a`, `b`, `dbg`)
+
 ## general macro to invoke all available zero_functional functions
 macro `-->`*(a: untyped, b: untyped): untyped =
   let (a, b2, debug) = checkArrow(a, b)
-  let l = b.dbgLineInfo(debug or debugAll)
-  if a.label != $Command.zip:
-    if not debug: # using debug (or `debug`) directly does not work (?!)
-      result = quote:
-        delegateArrow(type(`a`), `a`, `b2`, `l`)
-    else:
-      result = quote:
-        delegateArrow(type(`a`), `a`, `b2`, `l`)
-  else:
-    result = delegateMacro(a, b2, "seq", l)
+  let dbg = b2.dbgLineInfo(debug or debugAll)
+  result = quote:
+    arrowCall(`a`, `b2`, `dbg`)
 
 ## use this macro for debugging - will output the created code
 macro `-->>`*(a: untyped, b: untyped): untyped =
   let (a, b2, _) = checkArrow(a, b)
-  let l = b2.dbgLineInfo(true)
-  if a.label != $Command.zip:
-    result = quote:
-      delegateArrow(type(`a`), `a`, `b2`, `l`)
-  else:
-    result = delegateMacro(a, b2, "seq", l)
+  let dbg = b2.dbgLineInfo(true)
+  result = quote:
+    arrowCall(`a`, `b2`, `dbg`)
+
