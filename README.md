@@ -519,7 +519,7 @@ Concatenates the given arguments to one iterator. Can only be used as first comm
 check(concat([1,2],[3,4]) --> to(seq) == @[1,2,3,4])
 ```
 Alternatively `zf_concat` can be used to create an iterator that concatenates the given iterators to one.
-```
+```nim
 zf_concat(con, @[1], (2,3,4))
 check(con() --> to(seq) == @[1,2,3,4])
 ```
