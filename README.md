@@ -44,6 +44,8 @@ Table of Contents
          * [combinations](#combinations)
             * [indexedCombinations](#indexedcombinations)
          * [concat](#concat)
+         * [group](#group)
+         * [partition](#partition)
          * [to](#to)
             * [createIter](#createiter)
       * [Extending zero-functional](#extending-zero-functional)
@@ -524,6 +526,26 @@ zf_concat(con, @[1], (2,3,4))
 check(con() --> to(seq) == @[1,2,3,4])
 ```
 
+### group
+Creates a table containing result of each element applied to a discriminator function as keys and the corresponding elements in sequences as values.
+
+```nim
+# taking the last character of the strings as key
+let m = @[(1,"one"),(2,"two"),(3,"three")] --> group(it[1][^1])
+check(m['e'] == @[(1, "one"), (3, "three")])
+check(m['o'] == @[(2, "two")])
+```
+
+### partition
+Simplified version of `group` and alternative version to `filter` that returns a tuple with all elements that match the filter condition as first tuple element named `yes` and all non-matching as the second named `no`.
+
+```nim
+proc isEven(i: int): bool = (i and 1) == 0
+  let a = @[1,2,3,4,5,6]
+let p = a --> partition(it.isEven())
+check(p.yes == @[2,4,6])
+check(p.no == @[1,3,5])
+```
 ### to
 
 Finally, it is possible to force the result type to the type given in `to` - which is only allowed as last argument when generating collection results (e.g. `map` or `filter` are the last arguments before `to`).
@@ -741,10 +763,12 @@ The result type depends on the function used as last parameter.
 |flatten        |   +       |     +      |     +      | coll                        |
 |fold           |           |            |     +      | *                           |
 |foreach        |   +       |     +      |     +      | `void`                      |
+|group          |           |            |     +      | `table[*, seq[*]]`
 |index          |           |            |     +      | `int`                       |
 |indexedMap     |   +       |     +      |     +      | `seq[(int,*)]`              |
 |createIter     |           |            |  virtual   | iterator of given type      |
 |map            |   +       |     +      |     +      | `collType[*]`               |
+|partition      |           |            |     +      | `(yes:seq[*], no:seq[*])`
 |reduce         |           |            |     +      | *                           |
 |sub            |   +       |     +      |     +      | part coll / zeroed array    |
 |split          |           |            |     +      | `(seq[*],...seq[*])`        |

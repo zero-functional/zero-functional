@@ -37,6 +37,9 @@ else:
     const defaultCollectionType = "seq"
   const defaultResultType = defaultCollectionType & "[int]"
 
+proc print_code(code: NimNode) =
+  echo(repr(code).replace("`gensym", "_").replace("__", ""))
+
 type
 
   Command* {.pure.} = enum
@@ -482,7 +485,7 @@ proc res*(ext: ExtNimNode): NimNode {.compileTime.} =
 ## Replace the variable name `it` with the continuos iterator variable name.
 ## The same goes for the accu `a`.
 ## Expressions on the left side of dot `.` are not replaced - because `it`could
-## also be a member of a compund type - so `it.someMember` is replaced, `c.it` is not.
+## also be a member of a compound type - so `it.someMember` is replaced, `c.it` is not.
 proc adapt(node: NimNode, iteratorIndex: int, inFold: bool = false): NimNode {.compileTime.} =
   case node.kind:
   of nnkIdent:
@@ -612,6 +615,16 @@ proc replaceIt(a: NimNode, repl: NimNode, left: bool): bool =
 
     if a.kind == nnkDotExpr:
       break # only replace left side of dot
+
+## Revert `it` node to the first item of the listref for init section _before_ the actual loop section
+## as `it` is only defined within the loop section
+proc revertIt(ext: ExtNimNode) =
+  let it = mkItNode(0)
+  if ext.initials.findNode(nnkIdent, it.label) != nil:
+    let listRef = ext.listRef
+    let q = quote:
+      zfFirstItem(`listRef`)
+    ext.initials.replace(it, q)
 
 ## Replace variable definitions with quoted variables, return let section for ident definitions
 proc replaceVarDefs(a: NimNode, quotedVars: var Table[string, string],
@@ -927,7 +940,7 @@ macro zf_inline*(header: untyped, body: untyped): untyped =
 ## Useful when Zero-DSL cannot be used for the whole implementation of an inline function.
 macro zf_inline_dbg*(header: untyped, body: untyped): untyped =
   result = zeroParse(header, body)
-  echo(result.repr)
+  print_code(result)
 
 ## calls `zf_inline` registering the function call and calls the actual function.
 ## This can be used to add own implementations of inline-functions with parts in Zero-DSL.
@@ -994,11 +1007,11 @@ zf_inline filter(cond: bool):
       yield it
 
 ## Return the first item of an iterable
-proc zfFirstItem*[T](iter: Iterable[T]): T =
+proc zfFirstItem*(iter: Iterable): auto =
   for it in iter:
     return it
 
-## Implementation of `uniq`command.
+## Implementation of `uniq` command.
 ## All elements are processed that are not the same element as their preceeding element (or the first element).
 zf_inline uniq():
   pre:
@@ -1011,6 +1024,34 @@ zf_inline uniq():
       initialized = true
       prev = it
       yield it
+
+## Implementation of `partition` command.
+## Applies each element to the discriminator function and sorts the elements a tuple with to sequences.
+## The named tuple element `yes` contains all the elements matching the filter, `no` contains the rest.
+zf_inline partition(discriminator: bool):
+  pre:
+    let listRef = ext.listRef
+  init:
+    result = (yes: newSeq[type(zfFirstItem(`listRef`))](),
+              no: newSeq[type(zfFirstItem(`listRef`))]())
+  loop:
+    if discriminator:
+      result.yes.add(it)
+    else:
+      result.no.add(it)
+
+## Implementation of the `group` command.
+## Applies each element to the discriminator and adds the result to a table as key adding the elements to a sequence
+## for each key.
+zf_inline group(discriminator):
+  pre:
+    let listRef = ext.listRef
+  init:
+    result = initTable[type(discriminator), seq[type(zfFirstItem(`listRef`))]]()
+
+  loop:
+    result.mgetOrPut(discriminator, @[]).add(it)
+
 
 ## Implementation of the 'flatten' command.
 ## E.g. @[@[1,2],@[3],@[4,5,6]] --> flatten() == @[1,2,3,4,5,6]
@@ -1552,6 +1593,7 @@ proc inlineElement(ext: ExtNimNode) {.compileTime.} =
   else:
     ext.ensureFirst()
     ext.inlineSeq()
+  ext.revertIt()
 
 type
   ## Helper type to allow `[]` access for SomeLinkedList types
@@ -2170,7 +2212,7 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
         echo "#   " & orig[i].repr
         i += 1
 
-    echo(repr(result).replace("`gensym", "_").replace("__", ""))
+    print_code(result)
     # for the whole tree do (but this could crash):
     # echo(treeRepr(result))
 

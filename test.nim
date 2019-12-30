@@ -996,3 +996,23 @@ suite "valid chains":
     check(concat([1], @[2], (3, 4)) --> map($it) == @["1", "2", "3", "4"])
     zf_concat(con, @[1], (2,3,4))
     check(con() --> to(seq) == @[1,2,3,4])
+
+  test "partition":
+    proc isEven(i: int): bool = (i and 1) == 0
+    let a = @[1,2,3,4,5,6]
+    let p = a --> partition(it.isEven())
+    check(p.yes == @[2,4,6])
+    check(p.no == @[1,3,5])
+  
+  test "grouping":
+    proc isEven(i: int): bool = (i and 1) == 0
+    let a = @[1,2,3,4,5,6]
+    let p = a --> group(it.isEven())
+    check(p[true] == @[2,4,6])
+    check(p[false] == @[1,3,5])
+
+    # group by last character
+    let m = @[(1,"one"),(2,"two"),(3,"three")] --> group(it[1][^1])
+    check(m['e'] == @[(1, "one"), (3, "three")])
+    check(m['o'] == @[(2, "two")])
+  
