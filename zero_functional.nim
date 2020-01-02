@@ -178,7 +178,7 @@ proc label*(ext: ExtNimNode): string =
 proc findNodeParents(node: NimNode, discriminator: proc (
     n: NimNode): bool): seq[NimNode] =
   result = @[]
-  if (discriminator(node)):
+  if discriminator(node):
     return @[node]
   for child in node:
     let res = child.findNodeParents(discriminator)
@@ -640,12 +640,16 @@ proc replaceIt(a: NimNode, replNext: NimNode, replPrev: NimNode): (bool, bool) =
 ## Revert `it` node to the first item of the listref for init section _before_ the actual loop section
 ## as `it` is only defined within the loop section
 proc revertIt(ext: ExtNimNode) =
-  let it = mkItNode(0)
-  if ext.initials.findNode(nnkIdent, it.label) != nil:
+  let it0 = mkItNode(0)
+  let it = newIdentNode(zfIteratorVariableName)
+  proc isIt(node: NimNode): bool =
+    node.kind == nnkIdent and ($node == $it0 or $node == $it)
+  if ext.initials.findNode(isIt) != nil:
     let listRef = ext.listRef
     let q = quote:
       zfFirstItem(`listRef`)
-    ext.initials.replace(it, q, all=true)
+    ext.initials.replace(it, q, all = true)
+    ext.initials.replace(it0, q, all = true)
 
 ## Replace variable definitions with quoted variables, return let section for ident definitions
 proc replaceVarDefs(a: NimNode, quotedVars: var OrderedTable[string, string],
@@ -675,7 +679,7 @@ proc replaceVarDefs(a: NimNode, quotedVars: var OrderedTable[string, string],
         result.add(c)
 
 ## Add all symbol and variable definitions saved in symDefs to the letSection once
-## in the order they appear in the given code node. 
+## in the order they appear in the given code node.
 proc addDefinitions(node: NimNode, symDefs: var OrderedTable[string, NimNode],
     letSection: NimNode) =
   if (node.kind == nnkIdent or node.kind == nnkSym):
@@ -842,18 +846,18 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
               `funNameExport`)
     else:
       # register iterator as sequence handler
-      zfAddSequenceHandlers(if isCall: funName[0..funName.len-9] else: funName)
+      zfAddSequenceHandlers(funNameExport)
 
     # check if idx is used but not defined in the body section
-    if (body.findNode(nnkIdent, zfIndexVariableName) != nil):
+    if (body.findNode(nnkIdent, zfIndexVariableName) != nil and
+        body.findDefinition(zfIndexVariableName) == nil):
       idents(idxIdent)
-      if (body.findDefinition(zfIndexVariableName) == nil):
-        letSection.add quote do:
-          # add a definition for idx
-          let `idxIdent` = newIdentNode(`zfIndexVariableName`)
-          discard(`idxIdent`)
-          `ext`.needsIndex = true
-        quotedVars[zfIndexVariableName] = "idxIdent"
+      letSection.add quote do:
+        # add a definition for idx
+        let `idxIdent` = newIdentNode(`zfIndexVariableName`)
+        discard(`idxIdent`)
+        `ext`.needsIndex = true
+      quotedVars[zfIndexVariableName] = "idxIdent"
 
     if not (hasPre or body[0].label == "delegate") or
         not (body.len == 2 and body[1].label == "delegate"):
@@ -1021,7 +1025,7 @@ macro mkIndexedResult(idxVar: untyped, elemVar: untyped): untyped =
   quote:
     (`idxName`: `idxVar`, `elemName`: `elemVar`)
 
-macro mkAccuResult(accuVar: untyped, elemVar: untyped): untyped = 
+macro mkAccuResult(accuVar: untyped, elemVar: untyped): untyped =
   idents(accuName(zfAccuName), elemName(zfIndexedElemName))
   quote:
     (`accuName`: `accuVar`, `elemName`: `elemVar`)
@@ -1079,11 +1083,9 @@ proc zfFirstItem*(iter: Iterable): auto =
 ## Implementation of `uniq` command.
 ## All elements are processed that are not the same element as their preceeding element (or the first element).
 zf_inline uniq():
-  pre:
-    let listRef = ext.listRef
   init:
     var initialized = false
-    var prev: type(zfFirstItem(listRef))
+    var prev: type(it)
   loop:
     if not initialized or prev != it:
       initialized = true
@@ -1094,11 +1096,9 @@ zf_inline uniq():
 ## Applies each element to the discriminator function and sorts the elements a tuple with to sequences.
 ## The named tuple element `yes` contains all the elements matching the filter, `no` contains the rest.
 zf_inline partition(discriminator: bool):
-  pre:
-    let listRef = ext.listRef
   init:
-    result = (yes: newSeq[type(zfFirstItem(listRef))](),
-              no: newSeq[type(zfFirstItem(listRef))]())
+    result = (yes: newSeq[type(it)](),
+              no: newSeq[type(it)]())
   loop:
     if discriminator:
       result.yes.add(it)
@@ -1109,11 +1109,8 @@ zf_inline partition(discriminator: bool):
 ## Applies each element to the discriminator and adds the result to a table as key adding the elements to a sequence
 ## for each key.
 zf_inline group(discriminator):
-  pre:
-    let listRef = ext.listRef
   init:
-    result = initOrderedTable[type(discriminator), seq[type(zfFirstItem(listRef))]]()
-
+    result = initOrderedTable[type(discriminator), seq[type(it)]]()
   loop:
     result.mgetOrPut(discriminator, @[]).add(it)
 
@@ -1365,14 +1362,14 @@ proc inlineReduce(ext: ExtNimNode) {.compileTime.} =
           result = mkIndexedResult(idx, it)
           initAccu = false
         else:
-          let oldValue = result[1]
+          let oldValue = result.elem
           let it = mkAccuResult(oldValue, it) # reduce
           let newValue = op
           if not (oldValue == newValue):
             result = mkIndexedResult(idx, newValue) # propagate new value with idx
       endLoop:
         if initAccu:
-          result[0] = -1 # we actually do not have a result: set index to -1
+          result.idx = -1 # we actually do not have a result: set index to -1
 
   else:
     # normal reduce without index
@@ -1597,9 +1594,10 @@ proc inlineSeq(ext: ExtNimNode) {.compileTime.} =
       while (`idxIdent` <= high(`listRef`)):
         let `itIdent` = `listRef`[`idxIdent`]
         nil
-    # idx += 1 already done in iterHandler
+    # idx += 1 added in iterHandler
 
   elif ext.typeDescription.startswith("Option["):
+    # iterate over option
     let tpe = newIdentNode(ext.typeDescription[7..ext.typeDescription.len()-2])
     ext.node = quote:
       if `listRef` != none(`tpe`):
@@ -1611,10 +1609,6 @@ proc inlineSeq(ext: ExtNimNode) {.compileTime.} =
     ext.node = quote:
       for `itIdent` in `listRef`:
         nil
-
-proc ensureFirst(ext: ExtNimNode) {.compileTime.} =
-  if ext.itIndex > 0:
-    error("$1 supposed to be first - index is $2" % [ext.label, $ext.itIndex], ext.node)
 
 macro createExtendDefaults(): untyped =
   # creates proc zfExtendDefaults
@@ -1654,8 +1648,10 @@ proc inlineElement(ext: ExtNimNode) {.compileTime.} =
             # call was internally replaced by another call: repeat inlining
             ext.inlineElement()
   else:
-    ext.ensureFirst()
+    if ext.itIndex > 0:
+      error("$1 supposed to be first - index is $2" % [ext.label, $ext.itIndex], ext.node)
     ext.inlineSeq()
+  
   ext.revertIt()
 
 type

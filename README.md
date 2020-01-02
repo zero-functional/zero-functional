@@ -653,7 +653,7 @@ In this example also the `idx` variable is replaced automatically with the runni
 
 #### Special variables
 Special variables for `zf_inline` statements are:
-- `it`: when used is the previous iterator, when defined with `let it = ` creates a new iterator
+- `it`: when used is the previous iterator, when defined with `let it = ` creates a new iterator, in the `init` section `it` refers to the first element in the underlying collection
 - `idx`: the running index in the loop
 - `result`: the overall result and return type of the operation
 All other variables have to be defined in the `pre`-section, also when automatically assigned, e.g. when overriding the `idx` variable or when accessing a reference to the list as `listRef`.
