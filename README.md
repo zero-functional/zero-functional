@@ -373,14 +373,14 @@ var n = zip(a, b) --> map(it[0] + it[1]) --> fold(0, a + it)
 
 ### reduce
 
-Same as fold, but with the iterator converted to a tuple where `it[0]` is the current result and `it[1]` the actual iterator on the collection.
+Same as fold, but with the iterator converted to a tuple where `it[0]` or `it.accu` is the accumulated result and `it[1]` or `it.elem` the actual iterator on the collection.
 
 The first item of the collection is used as initial value - the other items are then accumulated to it.
 This is also useful when a type does not define the neutral element for the given operation.
 E.g. for integers and `+` the neutral element is 0 but for user defined types the neutral element might not exist.
 
 ```nim
-var n = a --> reduce(it[0] + it[1])
+var n = a --> reduce(it.accu + it.elem)
 ```
 
 There are a few commands that are simply mapped to reduce

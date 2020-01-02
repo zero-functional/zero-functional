@@ -357,7 +357,7 @@ suite "valid chains":
 
   test "array indexedMap":
     check((aArray --> indexedMap(it)) == @[(0, 2), (1, 8), (2, -4)])
-    check((aArray --> map(it + 2) --> indexedMap(it) --> map(it[0] + it[1])) ==
+    check((aArray --> indexedMap(it + 2) --> map(it.idx + it.elem)) ==
         @[4, 11, 0])
 
   test "array fold":
@@ -423,8 +423,8 @@ suite "valid chains":
     check((aArray --> subSeq(1, ^2)) == @[8])
 
   test "array indexedMap":
-    check((aArray --> map(it + 2) --> indexedMap(it) --> map(it[0] + it[1])) ==
-        @[4, 11, 0])
+    check((aArray --> map(it + 2) --> indexedMap(it) -->
+        map(it.idx + it.elem)) == @[4, 11, 0])
 
   test "seq filterSeq":
     check((a --> filterSeq(it > 0)) == @[2, 8])
@@ -434,7 +434,7 @@ suite "valid chains":
     check((a --> mapSeq(it * 2)) == @[4, 16, -8])
 
   test "seq indexedMap":
-    check((a --> indexedMap(it) --> map(it[0] + it[1])) == @[2, 9, -2])
+    check((a --> indexedMap(it) --> map(it.idx + it.elem)) == @[2, 9, -2])
 
   test "seq sub":
     check((a --> filter(idx >= 1)) == @[8, -4])
@@ -523,7 +523,8 @@ suite "valid chains":
   test "combinations":
     ## get indices of items where the difference of the elements is 1
     let items = @[1, 5, 2, 9, 8, 3, 11]
-    # ----------- 0 1 2 3 4 5 6
+    # ----------- 0..1..2..3..4..5..6
+    #------------ ^.....^........^
     proc abs1(a: int, b: int): bool = abs(a-b) == 1
     let b = items -->
       indexedCombinations().
@@ -626,7 +627,7 @@ suite "valid chains":
     reject(si --> foreach(it = it * 2)) # foreach needs [] when changing elements
     var sum = 0
     si --> foreach(sum += it) # foreach without changing the content works however
-    check(si --> reduce(it[0] + it[1]) == sum)
+    check(si --> reduce(it.accu + it.elem) == sum)
     accept(si --> fold(0, a + it) == 6)
 
     # on the other hand when converted to list or seq (or something with []) the list can be changed
@@ -716,7 +717,7 @@ suite "valid chains":
       if something:
         return res
       return @[11]
-    check(@[0, 1, 2].testfun(true) --> reduce(it[0]+it[1]) == 3)
+    check(@[0, 1, 2].testfun(true) --> reduce(it.accu + it.elem) == 3)
     check(@[0, 1, 2].testfun(false) --> reduce(it[0]+it[1]) == 11)
     check(testfun(@[0, 1, 2], true) --> reduce(it[0]+it[1]) == 3)
     check(testfun(@[0, 1, 2], false) --> reduce(it[0]+it[1]) == 11)
@@ -967,9 +968,9 @@ suite "valid chains":
     check($(@[1, 2] --> zip(a)) == "@[(1, 2), (2, 8)]")
 
   test "uniq":
-    check(@[1, 2, 2, 2, 2, 3, 4, 4, 4, 5] --> uniq() == @[1, 2, 3, 4, 5]);
+    check(@[1, 2, 2, 2, 2, 3, 4, 4, 4, 5] --> uniq() == @[1, 2, 3, 4, 5])
     # uniqueness is only determined consecutively
-    check(@[1, 1, 2, 1, 1, 3, 1] --> uniq() == @[1, 2, 1, 3, 1]);
+    check(@[1, 1, 2, 1, 1, 3, 1] --> uniq() == @[1, 2, 1, 3, 1])
 
   test "inner exists":
     let x = @[1, 2, 3]
@@ -991,28 +992,28 @@ suite "valid chains":
 
   test "concat":
     proc concat_to_seq(): auto =
-      concat(a, b, [7]) --> to(seq) 
+      concat(a, b, [7]) --> to(seq)
     check(concat_to_seq() == @[2, 8, -4, 0, 1, 2, 7])
     check(concat([1], @[2], (3, 4)) --> map($it) == @["1", "2", "3", "4"])
-    zf_concat(con, @[1], (2,3,4))
-    check(con() --> to(seq) == @[1,2,3,4])
+    zf_concat(con, @[1], (2, 3, 4))
+    check(con() --> to(seq) == @[1, 2, 3, 4])
 
   test "partition":
     proc isEven(i: int): bool = (i and 1) == 0
-    let a = @[1,2,3,4,5,6]
+    let a = @[1, 2, 3, 4, 5, 6]
     let p = a --> partition(it.isEven())
-    check(p.yes == @[2,4,6])
-    check(p.no == @[1,3,5])
-  
+    check(p.yes == @[2, 4, 6])
+    check(p.no == @[1, 3, 5])
+
   test "grouping":
     proc isEven(i: int): bool = (i and 1) == 0
-    let a = @[1,2,3,4,5,6]
+    let a = @[1, 2, 3, 4, 5, 6]
     let p = a --> group(it.isEven())
-    check(p[true] == @[2,4,6])
-    check(p[false] == @[1,3,5])
+    check(p[true] == @[2, 4, 6])
+    check(p[false] == @[1, 3, 5])
 
     # group by last character
-    let m = @[(1,"one"),(2,"two"),(3,"three")] --> group(it[1][^1])
+    let m = @[(1, "one"), (2, "two"), (3, "three")] --> group(it[1][^1])
     check(m['e'] == @[(1, "one"), (3, "three")])
     check(m['o'] == @[(2, "two")])
-  
+

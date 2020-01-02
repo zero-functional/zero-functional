@@ -9,6 +9,7 @@ const zfInternalHelperProc* = "__helperProc__"
 const zfInternalIteratorName* = "__autoIter__"
 const zfIndexedElemName* = "elem"
 const zfIndexedIndexName* = "idx"
+const zfAccuName* = "accu"
 
 const zfArrow = "-->"
 const zfArrowDbg = "-->>"
@@ -213,15 +214,16 @@ proc findDefinition*(node: NimNode, label: string,
   return node.findNode(hasDefinition)
 
 ## Replace a given node by another in a specific parent
-proc replace(node: NimNode, searchNode: NimNode, replNode: NimNode) =
+proc replace(node: NimNode, searchNode: NimNode, replNode: NimNode,
+    all: bool = false) =
   if node.len > 0:
     for i in 0..<node.len:
       let child = node[i]
       if child.kind == searchNode.kind and (child == searchNode or
-          child.repr == searchNode.repr):
+          all and child.repr == searchNode.repr):
         node[i] = replNode
-      else:
-        child.replace(searchNode, replNode)
+      elif all:
+        child.replace(searchNode, replNode, all)
 
 ## Helper that gets nnkStmtList and removes a 'nil' inside it - if present.
 ## The nil is used as placeholder for further added code.
@@ -578,7 +580,7 @@ proc addElemResult(ext: ExtNimNode, addItem: NimNode): NimNode {.compileTime.} =
         `resultType`, `autoConvert`)
 
 ## Helper for Zero-DSL: quote all used variables that are defined somewhere in the created function.
-proc addQuotes(a: NimNode, quotedVars: Table[string, string]) =
+proc addQuotes(a: NimNode, quotedVars: OrderedTable[string, string]) =
   if a.kind != nnkAccQuoted and (a.kind != nnkCall or a[0].label != "pre"):
     for i in 0..<a.len:
       let child = a[i]
@@ -589,32 +591,51 @@ proc addQuotes(a: NimNode, quotedVars: Table[string, string]) =
       if a.kind == nnkDotExpr:
         break # only quote left side of dot expressions
 
+## Helper for Zero-DSL: replace all `it` nodes by next or prev iteraor
+proc replaceItSub(parent: NimNode, a: NimNode, repl: NimNode,
+    left: bool): bool =
+  result = false
+
+  if a.kind == nnkIdent and a.label == zfIteratorVariableName:
+    parent.replace(a, repl)
+    result = true
+  else:
+    for child in a:
+      result = a.replaceItSub(child, repl, left) or result
+      if result and left and a.kind == nnkDotExpr:
+        # only replace left side of dot
+        break
+
 ## Helper for Zero-DSL: replace all 'it' nodes by the next iterator (in let expressions when defining a new iterator)
 ## or by previous iterator.
-proc replaceIt(a: NimNode, repl: NimNode, left: bool): bool =
-  result = false
-  # supress replace of `yield it`
+proc replaceIt(a: NimNode, replNext: NimNode, replPrev: NimNode): (bool, bool) =
+  var res = (left: false, right: false)
+
+  let replLeft = replNext;
+  var replRight = replPrev;
+
   if a.kind == nnkYieldStmt:
-    return false
+    return res
 
   for child in a:
-    if left and (child.kind == nnkExprEqExpr or child.kind == nnkIdentDefs):
-      if child[0].kind == nnkIdent and child[0].label == zfIteratorVariableName:
-        child[0] = repl
-        return true
+    let is_assignment = child.kind == nnkExprEqExpr or
+      child.kind == nnkIdentDefs or child.kind == nnkAsgn
 
-    elif not left:
+    if is_assignment:
+      res.right = child.replaceItSub(child[^1], replRight, false) or res.right
+      res.left = child.replaceItSub(child[0], replLeft, true) or res.left
+    else:
       if child.kind == nnkIdent and child.label == zfIteratorVariableName:
-        a.replace(child, repl)
-        result = true
+        a.replace(child, replRight)
+        res.right = true
+      else:
+        let r = child.replaceIt(replLeft, replRight)
+        res = (r[0] or res[0], r[1] or res[1])
 
-    if child.replaceIt(repl, left):
-      if left:
-        return true # only once per left node
-      result = true
+    if res.left:
+      replRight = replNext
 
-    if a.kind == nnkDotExpr:
-      break # only replace left side of dot
+  result = res
 
 ## Revert `it` node to the first item of the listref for init section _before_ the actual loop section
 ## as `it` is only defined within the loop section
@@ -624,10 +645,10 @@ proc revertIt(ext: ExtNimNode) =
     let listRef = ext.listRef
     let q = quote:
       zfFirstItem(`listRef`)
-    ext.initials.replace(it, q)
+    ext.initials.replace(it, q, all=true)
 
 ## Replace variable definitions with quoted variables, return let section for ident definitions
-proc replaceVarDefs(a: NimNode, quotedVars: var Table[string, string],
+proc replaceVarDefs(a: NimNode, quotedVars: var OrderedTable[string, string],
     preSection = false): NimNode =
   result = nnkStmtList.newTree()
   let isPre = preSection or (a.kind == nnkCall and a[0].label == "pre")
@@ -652,6 +673,30 @@ proc replaceVarDefs(a: NimNode, quotedVars: var Table[string, string],
       let c = b.replaceVarDefs(quotedVars, isPre)
       if c.len > 0:
         result.add(c)
+
+## Add all symbol and variable definitions saved in symDefs to the letSection once
+## in the order they appear in the given code node. 
+proc addDefinitions(node: NimNode, symDefs: var OrderedTable[string, NimNode],
+    letSection: NimNode) =
+  if (node.kind == nnkIdent or node.kind == nnkSym):
+    let symDef = symDefs.getOrDefault($node, nil)
+    if symDef != nil:
+      letSection.add(symDef)
+      # only added once
+      symDefs.del(node.label)
+
+  if symDefs.len > 0:
+    for child in node:
+      let is_assignment = child.kind == nnkExprEqExpr or child.kind ==
+          nnkIdentDefs or child.kind == nnkAsgn
+
+      if is_assignment:
+        # right side goes first! This also ensures the next iterator (on the left side)
+        # to be created after the previous (on the right side)
+        child[^1].addDefinitions(symDefs, letSection)
+        child[0].addDefinitions(symDefs, letSection)
+      else:
+        child.addDefinitions(symDefs, letSection)
 
 ## Called when delegate section is used in Zero-DSL
 proc zfDelegate*(ext: ExtNimNode, caller: NimNode, delegateIndex: int) =
@@ -724,8 +769,9 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
     let letSection = nnkStmtList.newTree()
     # reference to the 'ext' parameter of the created proc
     idents(ext)
-    var quotedVars = initTable[string, string]()
+    var quotedVars = initOrderedTable[string, string]()
     letSection.add(body.replaceVarDefs(quotedVars))
+
     let numArgs = funDef.len-1
     let hasPre = body[0].label == "pre"
     let firstSym = if funDef.len > 1: funDef[1].label else: ""
@@ -741,7 +787,10 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
       paramSection.add(chk)
 
     # save type of parameters when explicitly given
-    var paramTypes = initTable[string, NimNode]()
+    var paramTypes = initOrderedTable[string, NimNode]()
+    # save all symbol / variable defintitions for later insertion
+    # these are saved especially for automatic variables such as `it`
+    var symDefs = initOrderedTable[string, NimNode]()
 
     # check the function parameter types
     for i in 1..numArgs:
@@ -763,7 +812,7 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
         quotedVars[symName] = symName
         if paramType != nil:
           paramTypes[symName] = paramType
-      paramSection.add quote do:
+      symDefs[symName] = quote:
         let `sym` =
           if `i` < `ext`.node.len:
             adapt(`ext`, `i`)
@@ -806,18 +855,18 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
           `ext`.needsIndex = true
         quotedVars[zfIndexVariableName] = "idxIdent"
 
-    if (not hasPre and body[0].label != "delegate") or body.len != 2 or body[
-        1].label != "delegate":
+    if not (hasPre or body[0].label == "delegate") or
+        not (body.len == 2 and body[1].label == "delegate"):
       # replace it in 'it = ...' with `nextIt` and create the next iterator
-      idents(nextIt("nextIdent"))
-      if body.replaceIt(nnkAccQuoted.newTree(nextIt), true):
-        letSection.add quote do:
-          let `nextIt` = `ext`.nextItNode()
-      # access the previous iterator replacing 'it'
-      idents(prev("prevIdent"))
-      if body.replaceIt(nnkAccQuoted.newTree(prev), false):
-        letSection.add quote do:
-          let `prev` = `ext`.prevItNode()
+      idents(nextIt("nextIdent"), prevIt("prevIdent"))
+      discard body.replaceIt(nnkAccQuoted.newTree(nextIt), nnkAccQuoted.newTree(prevIt))
+      symDefs["prevIdent"] = quote:
+        let `prevIt` = `ext`.prevItNode()
+      symDefs["nextIdent"] = quote:
+        let `nextIt` = `ext`.nextItNode()
+
+    # add all definitions in the order they are used
+    body.addDefinitions(symDefs, paramSection)
 
     # create the proc
     let q = quote:
@@ -954,11 +1003,28 @@ macro zf_inline_call*(header: untyped, body: untyped): untyped =
     `q`
     `fun`(`ext`)
 
+# debug version that prints the generated code
+macro zf_inline_call_dbg*(header: untyped, body: untyped): untyped =
+  doAssert(header.kind == nnkCall or header.kind == nnkObjConstr)
+  header[0] = newIdentNode(header.label & "__call__")
+  let fun = newIdentNode("inline" & header.label.capitalizeAscii())
+  idents(ext)
+  let q = zeroParse(header, body)
+  print_code(q)
+  result = quote:
+    `q`
+    `fun`(`ext`)
+
 ## creates the result tuple of an `indexed` command with index first, then the actual element.
 macro mkIndexedResult(idxVar: untyped, elemVar: untyped): untyped =
   idents(elemName(zfIndexedElemName), idxName(zfIndexedIndexName))
   quote:
     (`idxName`: `idxVar`, `elemName`: `elemVar`)
+
+macro mkAccuResult(accuVar: untyped, elemVar: untyped): untyped = 
+  idents(accuName(zfAccuName), elemName(zfIndexedElemName))
+  quote:
+    (`accuName`: `accuVar`, `elemName`: `elemVar`)
 
 ## Implementation of the 'map' command.
 ## Each element of the input is mapped to a given function.
@@ -985,11 +1051,10 @@ proc inlineMap*(ext: ExtNimNode) {.compileTime.} =
       ext.node.add(newIdentDefs(v[0], newEmptyNode(), v[1]))
     if not isInternal: # leave out definitions that access it or idx directly
       # set next iterator
-      let nextIt = ext.nextItNode()
       let f = v[0] # set 'it' to the previously assigned value / 'it' might also be consequently used
       ext.node = nnkStmtList.newTree(ext.node).add quote do:
-        let `nextIt` = `f`
-        discard(`nextIt`) # iterator might not be used
+        let it = `f`
+        discard(it) # iterator might not be used
   else:
     zf_inline_call map(f):
       loop:
@@ -1032,8 +1097,8 @@ zf_inline partition(discriminator: bool):
   pre:
     let listRef = ext.listRef
   init:
-    result = (yes: newSeq[type(zfFirstItem(`listRef`))](),
-              no: newSeq[type(zfFirstItem(`listRef`))]())
+    result = (yes: newSeq[type(zfFirstItem(listRef))](),
+              no: newSeq[type(zfFirstItem(listRef))]())
   loop:
     if discriminator:
       result.yes.add(it)
@@ -1047,7 +1112,7 @@ zf_inline group(discriminator):
   pre:
     let listRef = ext.listRef
   init:
-    result = initTable[type(discriminator), seq[type(zfFirstItem(`listRef`))]]()
+    result = initOrderedTable[type(discriminator), seq[type(zfFirstItem(listRef))]]()
 
   loop:
     result.mgetOrPut(discriminator, @[]).add(it)
@@ -1081,7 +1146,7 @@ zf_inline indexedFlatten():
       idxInner += 1
       idxFlatten += 1
       let it = mkIndexedResult(idxInner, flattened)
-      let `idx` = idxFlatten
+      let `idx` = idxFlatten # overwrite the idx variable (if present)
       discard(`idx`)
 
 ## Implementation of the `takeWhile` command.
@@ -1290,20 +1355,18 @@ proc inlineReduce(ext: ExtNimNode) {.compileTime.} =
           it[0] + it[1]
     ext.node.add(operation)
 
-  # in reduce the operator has to use the newest iterator
-  let nextIt = ext.nextItNode()
   if ext.label.startswith("indexed"):
-
+    # indexed implementation
     zf_inline_call reduce(op):
       init:
         var initAccu = true
       loop:
         if initAccu:
-          result = (idx, it)
+          result = mkIndexedResult(idx, it)
           initAccu = false
         else:
           let oldValue = result[1]
-          let `nextIt` = (oldValue, it) # reduce
+          let it = mkAccuResult(oldValue, it) # reduce
           let newValue = op
           if not (oldValue == newValue):
             result = mkIndexedResult(idx, newValue) # propagate new value with idx
@@ -1312,6 +1375,7 @@ proc inlineReduce(ext: ExtNimNode) {.compileTime.} =
           result[0] = -1 # we actually do not have a result: set index to -1
 
   else:
+    # normal reduce without index
     zf_inline_call reduce(op):
       init:
         var initAccu = true
@@ -1320,8 +1384,7 @@ proc inlineReduce(ext: ExtNimNode) {.compileTime.} =
           result = it
           initAccu = false
         else:
-          let prevIt = it
-          let `nextIt` = (result, prevIt)
+          let it = mkAccuResult(result, it)
           result = op
 
 proc combineWithOtherCollection(ext: ExtNimNode, indexed: bool) {.compileTime.} =
