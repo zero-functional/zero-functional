@@ -49,11 +49,11 @@ Table of Contents
          * [to](#to)
             * [createIter](#createiter)
       * [Extending zero-functional](#extending-zero-functional)
+         * [Extending with plain nim](#extending-with-plain-nim)
          * [Writing extensions with Zero-DSL](#writing-extensions-with-zero-dsl)
             * [Special variables](#special-variables)
             * [Setting the result](#setting-the-result)
-         * [Extending with plain nim](#extending-with-plain-nim)
-            * [Defering to Zero-DSL inside plain nim](#defering-to-zero-dsl-inside-plain-nim)
+         * [Defering to Zero-DSL inside plain nim](#defering-to-zero-dsl-inside-plain-nim)
             * [Creating compound commands with other commands](#creating-compound-commands-with-other-commands)
       * [Overview Table](#overview-table)
       * [Debugging using --&gt;&gt;](#debugging-using---)
@@ -590,7 +590,39 @@ errorLines() --> foreach(echo it)
 ## Extending zero-functional
 
 Extending zero-functional with own functions is probably more complicated than with other fp-libraries as the functions have to be implemented with macros producing inlined imperative code. 
-Some good examples - 2 very basic and 2 more complicated - can be found in [test.nim: registerExtension](test.nim) and also in the source code of [zero-functional](zero-functional.nim)
+Some good examples from basic to more complicated can be found in [test.nim: registerExtension](test.nim) and in the source code of [zero-functional](zero-functional.nim)
+
+### Extending with plain nim
+When adding your own `foo` implementation you can write your own `inlineFoo` proc and register it with zero_functional. It should look like this:
+```nim
+proc inlineFoo*(ext: ExtNimNode) {.compileTime.} =
+  # do some parameter checks
+  if ext.node.len > SOME_MAX:
+    zfFail("too many arguments in \'$1\', got $2 but expected only $3" %
+        [ext.node.repr, $(ext.node.len - 1), $SOME_MAX])
+  # do some stuff
+  # ...
+  # the actual 'loop' section code
+  ext.node = quote:
+    # do something
+```
+
+The vanilla `inline`-proc implementations should follow certain rules. 
+- `ext: ExtNimNode` as parameter
+- ExtNimNode should be used when implementing the functions with some helpers:
+  - `ext.node` = place the actual code here that is being generated inside the current block 
+	initially `ext.node` contains the current function call and its parameters (section: loop)
+  - `ext.initials` = add the initialization code for variable definitions (section: init)
+  - `ext.endLoop` = add code that can be inserted at the end of the loop (section: end)
+  - `ext.finals` = add code after the loop - e.g. to calculate a result (section: final)
+  - `ext.res` = helper: access to the function's result
+  - `ext.prevItNode()` = access to the iterator generated in the previous statement or loop
+  - `ext.nextItNode()` = generates a new iterator for the current block. This is the (intermediate) result of the current operation that can be used with the next function
+- check of parameters / number of parameters has to be done in the implementation 
+- use `zfFail()` if any checks fail
+- register functions that use neither `zf_inline` nor `zf_inline_call` using `zfAddFunction`
+- functions that create another sequence have to be registered with `zfAddSequenceHandlers`
+- finally call `zfCreateExtension` after all `zf_inline...` definitions and `zfAddFunction` calls - before using the actual function implementation
 
 ### Writing extensions with Zero-DSL
 Example - implement the (simple) map function:
@@ -604,7 +636,7 @@ zf_inline map(f):
 `zf_inline_dbg` will print the generated code `proc inlineMap` (see below).
 
 The sections directly map to their counterparts in `ExtNimNode`:
-- `pre` prepare section: initialize variables and constants 
+- `pre` prepare section: initialize variables and constants. It is possible to do the entire implementation in the `pre` section.
 	- all variables that are used in other sections have to be defined here!
 - `init` variable initialization before the loop
 - `loop` the actual loop action (maps to `ext.node`)
@@ -679,39 +711,7 @@ zf_inline filter(cond: bool):
       yield it # add the current iterator to the resulting collection
 ```
 
-### Extending with plain nim
-When adding your own `foo` implementation you can write your own `inlineFoo` proc and register it with zero_functional. It should look like this:
-```nim
-proc inlineFoo*(ext: ExtNimNode) {.compileTime.} =
-  # do some parameter checks
-  if ext.node.len > SOME_MAX:
-    zfFail("too many arguments in \'$1\', got $2 but expected only $3" %
-        [ext.node.repr, $(ext.node.len - 1), $SOME_MAX])
-  # do some stuff
-  # ...
-  # the actual 'loop' section code
-  ext.node = quote:
-    # do something
-```
-
-The vanilla `inline`-proc implementations should follow certain rules. 
-- `ext: ExtNimNode` as parameter
-- ExtNimNode should be used when implementing the functions with some helpers:
-  - `ext.node` = place the actual code here that is being generated inside the current block 
-	initially `ext.node` contains the current function call and its parameters (section: loop)
-  - `ext.initials` = add the initialization code for variable definitions (section: init)
-  - `ext.endLoop` = add code that can be inserted at the end of the loop (section: end)
-  - `ext.finals` = add code after the loop - e.g. to calculate a result (section: final)
-  - `ext.res` = helper: access to the function's result
-  - `ext.prevItNode()` = access to the iterator generated in the previous statement or loop
-  - `ext.nextItNode()` = generates a new iterator for the current block. This is the (intermediate) result of the current operation that can be used with the next function
-- check of parameters / number of parameters has to be done in the implementation 
-- use `zfFail()` if any checks fail
-- register functions that use neither `zf_inline` nor `zf_inline_call` using `zfAddFunction`
-- functions that create another sequence have to be registered with `zfAddSequenceHandlers`
-- finally call `zfCreateExtension` after all `zf_inline...` definitions and `zfAddFunction` calls - before using the actual function implementation
-
-#### Defering to Zero-DSL inside plain nim
+### Defering to Zero-DSL inside plain nim
 As Zero-DSL is limited in its expressiveness - e.g. there is no possibility to defer to a different loop implementation depending on the input type - it is possible to defer to different Zero-DSL implementations in the nim code using `zf_inline_call`. Example calling two implementations - one specialized to work on lists, the other for sequences:
 ```nim
 proc inlineFoo*(ext: ExtNimNode) {.compileTime.} =
