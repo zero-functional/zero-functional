@@ -225,22 +225,30 @@ proc replace(node: NimNode, searchNode: NimNode, replNode: NimNode,
       elif all:
         child.replace(searchNode, replNode, all)
 
+proc getNilStmtParent(node: NimNode): (NimNode, int) = 
+  result = (nil, -1)
+  var n = node
+  for i in countdown(n.len-1, 0):
+    let c = n[i]
+    let res = c.getNilStmtParent()
+    if res[0] != nil:
+      return res
+    if c.kind == nnkNilLit:
+      return (n, i)
+
 ## Helper that gets nnkStmtList and removes a 'nil' inside it - if present.
 ## The nil is used as placeholder for further added code.
-proc getStmtList*(node: NimNode, removeNil = true): NimNode =
-  var child = node
-  while child.len > 0:
-    child = child.last
-    if child.kind == nnkStmtList:
-      if removeNil:
-        if child.len > 0 and child.last.kind == nnkNilLit:
-          child.del(child.len-1)
-        else:
-          let sub = child.getStmtList()
-          if sub != nil:
-            return sub
-      return child
-  return nil
+proc getStmtList*(node: NimNode, removeNil = true) : NimNode =
+  if removeNil:
+    let parent = node.getNilStmtParent()
+    if parent[0] != nil:
+      parent[0].del(parent[1])
+      return parent[0]
+  var n = node
+  while n.kind != nnkStmtList or (n.len > 0 and n.last.kind == nnkStmtList):
+    n = n.last
+  result = n
+
 
 macro idents(args: varargs[untyped]): untyped =
   ### shortcut implementation
@@ -1129,6 +1137,7 @@ zf_inline flatten():
       idxFlatten += 1
       let `idx` = idxFlatten
       discard(`idx`)
+      yield it
 
 zf_inline indexedFlatten():
   pre:
@@ -1144,6 +1153,7 @@ zf_inline indexedFlatten():
       let it = mkIndexedResult(idxInner, flattened)
       let `idx` = idxFlatten # overwrite the idx variable (if present)
       discard(`idx`)
+      yield it
 
 ## Implementation of the `takeWhile` command.
 ## `takeWhile(cond)` : Take all elements as long as the given condition is true.

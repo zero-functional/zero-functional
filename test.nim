@@ -126,6 +126,28 @@ zf_inline intersect(_):
     filter(chain)
     map(it[0])
 
+zf_inline intersectFast(_):
+  # Faster implementation of intersect that only uses the `pre` section.
+  # In the `pre` section the `ext.node` is filled with the generated code.
+  # All necessary registrations will be done automatically.
+  pre:
+    var itIdent = ext.prevItNode()
+    let lists = ext.node
+    ext.node = nnkStmtList.newTree()
+    var codePtr = ext.node
+
+    # iterate over all collections (first collection already iterated)
+    for idx in 1..lists.len - 1:
+      let listRef = lists[idx]
+      var prev = itIdent
+      itIdent = ext.nextItNode()
+      codePtr = codePtr.getStmtList().add quote do:
+        for `itIdent` in `listRef`:
+          if `itIdent` == `prev`:
+            block: # must use block here because we need a statement list that replaces nil
+              nil
+            break
+
 zf_inline removeDoubles():
 # remove double elements. Code taken from example "remove doublettes" below
   pre:
@@ -850,6 +872,7 @@ suite "valid chains":
     check(a --> intersect(b) == @[1, 4, 9])
     check(a --> intersect(b, b) == @[1, 4, 9])
     check(a --> intersect(b, c) == @[4, 9])
+    check(a --> intersectFast(b, c) == @[4, 9])
 
     # increment a by 1 and by 2
     check(a --> inc() == @[2, 5, 4, 3, 6, 10])
