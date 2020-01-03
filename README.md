@@ -719,7 +719,6 @@ proc inlineFoo*(ext: ExtNimNode) {.compileTime.} =
     # provide list implementation
     zf_inline_call foo(param):
       ... 
-
   else:
     # provide plain implementation (e.g. using [])
     zf_inline_call reduce(op):
@@ -746,7 +745,6 @@ zf_inline removeDoubles():
     filter(it.idx[0] == it.idx[1]) 
     map(it.elem[0])
 ```
-
 
 ## Overview Table
 
@@ -778,7 +776,7 @@ The result type depends on the function used as last parameter.
 + *: any type depending on given function parameters
 + coll: is the input collection
 + collType is the input collection type (without template argument)
-+ to: is a "virtual" function, can only be given as last argument, but does not count as last argument.
++ "virtual" function: can only be given as last argument, but does not count as last argument.
 
 ## Debugging using `-->>`
 
