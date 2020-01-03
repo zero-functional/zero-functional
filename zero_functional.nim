@@ -39,7 +39,7 @@ else:
   const defaultResultType = defaultCollectionType & "[int]"
 
 proc print_code(code: NimNode) =
-  echo(repr(code).replace("`gensym", "_").replace("__", ""))
+  echo(repr(code).replace("`gensym", "_").replace("__call__", "Call").replace("__", ""))
 
 type
 
@@ -189,8 +189,8 @@ proc findNodeParents(node: NimNode, discriminator: proc (
 proc findNodeParents(node: NimNode, kind: NimNodeKind,
     content: string = ""): seq[NimNode] =
   proc discriminator(node: NimNode): bool =
-    return node.kind == kind and (content.len == 0 or content == node.label)
-  return node.findNodeParents(discriminator)
+    result = node.kind == kind and (content.len == 0 or content == node.label)
+  result = node.findNodeParents(discriminator)
 
 ## check if the discriminator function is valid for the node or one of its children (depth-first).
 proc findNode(node: NimNode, discriminator: proc (n: NimNode): bool): NimNode =
@@ -204,14 +204,14 @@ proc findNode*(node: NimNode, kind: NimNodeKind,
   ## Find a node given its kind and - optionally - its content.
   proc hasNodeWithKind(node: NimNode): bool =
     result = (node.kind == kind and (content.len == 0 or content == $node))
-  return node.findNode(hasNodeWithKind)
+  result = node.findNode(hasNodeWithKind)
 
 proc findDefinition*(node: NimNode, label: string,
     kind = nnkLetSection): NimNode =
   ## Find the definition of a constant or variable
   proc hasDefinition(node: NimNode): bool =
     result = (node.kind == kind and node.findNode(nnkIdent, label) != nil)
-  return node.findNode(hasDefinition)
+  result = node.findNode(hasDefinition)
 
 ## Replace a given node by another in a specific parent
 proc replace(node: NimNode, searchNode: NimNode, replNode: NimNode,
@@ -489,18 +489,22 @@ proc res*(ext: ExtNimNode): NimNode {.compileTime.} =
 ## Expressions on the left side of dot `.` are not replaced - because `it`could
 ## also be a member of a compound type - so `it.someMember` is replaced, `c.it` is not.
 proc adapt(node: NimNode, iteratorIndex: int, inFold: bool = false): NimNode {.compileTime.} =
+  result = node
+
   case node.kind:
+
   of nnkIdent:
     if $node == zfIteratorVariableName:
-      return mkItNode(iteratorIndex)
+      result = mkItNode(iteratorIndex)
     elif inFold and useInternalAccu and $node == zfAccuVariableName:
-      return newIdentNode(internalAccuName)
-    else:
-      return node
+      result = newIdentNode(internalAccuName)
+
   of nnkFloatLit..nnkFloat128Lit, nnkCharLit..nnkUInt64Lit,
       nnkStrLit..nnkTripleStrLit, nnkSym:
-    return node
+    discard
+
   else:
+    # adapt the child nodes
     for z in 0..<node.len:
       node[z] = node[z].adapt(iteratorIndex, inFold)
       if node.kind == nnkDotExpr:
@@ -514,7 +518,6 @@ proc adapt(node: NimNode, iteratorIndex: int, inFold: bool = false): NimNode {.c
         # this prevents replacing `it` in the context of the outer loop (outer `-->` call)
         # zfun should be same as `-->` except here it should break after the first parameter
         break
-    return node
 
 ## Shortcut for `node.adapt()` using the current iterator variable.
 ## Variable names like `it` or `idx` are replaced by their internal (unique) presentations.
@@ -995,29 +998,25 @@ macro zf_inline_dbg*(header: untyped, body: untyped): untyped =
   result = zeroParse(header, body)
   print_code(result)
 
+
 ## calls `zf_inline` registering the function call and calls the actual function.
 ## This can be used to add own implementations of inline-functions with parts in Zero-DSL.
-macro zf_inline_call*(header: untyped, body: untyped): untyped =
+macro zf_inline_call*(header: untyped, body: untyped, dbg: static[bool] = false): untyped =
   doAssert(header.kind == nnkCall or header.kind == nnkObjConstr)
   header[0] = newIdentNode(header.label & "__call__")
   let fun = newIdentNode("inline" & header.label.capitalizeAscii())
   idents(ext)
   let q = zeroParse(header, body)
+  if dbg:
+    print_code(q)
   result = quote:
     `q`
     `fun`(`ext`)
 
 # debug version that prints the generated code
 macro zf_inline_call_dbg*(header: untyped, body: untyped): untyped =
-  doAssert(header.kind == nnkCall or header.kind == nnkObjConstr)
-  header[0] = newIdentNode(header.label & "__call__")
-  let fun = newIdentNode("inline" & header.label.capitalizeAscii())
-  idents(ext)
-  let q = zeroParse(header, body)
-  print_code(q)
   result = quote:
-    `q`
-    `fun`(`ext`)
+    zf_inline_call(`header`, `body`, true)
 
 ## creates the result tuple of an `indexed` command with index first, then the actual element.
 macro mkIndexedResult(idxVar: untyped, elemVar: untyped): untyped =
@@ -1228,13 +1227,10 @@ zf_inline exists(search: bool):
 ## Searches the input for a given expression. Returns an option value.
 zf_inline find(cond: bool):
   init:
-    var i = 0
+    result = none(it.type)
   loop:
     if cond:
       return some(it)
-    else:
-      # this constant is unnecessarily written every loop - but should be optimized by the compiler in the end
-      result = none(it.type)
 
 ## Implementation of the 'all' command.
 ## Returns true of the given condition is true for all elements of the input, else false.
@@ -1363,7 +1359,9 @@ proc inlineReduce(ext: ExtNimNode) {.compileTime.} =
           initAccu = false
         else:
           let oldValue = result.elem
-          let it = mkAccuResult(oldValue, it) # reduce
+          # assign the new iterator to the old value as accumulator 
+          # before calling the operation `op`
+          let it = mkAccuResult(oldValue, it)
           let newValue = op
           if not (oldValue == newValue):
             result = mkIndexedResult(idx, newValue) # propagate new value with idx
@@ -1391,20 +1389,27 @@ proc combineWithOtherCollection(ext: ExtNimNode, indexed: bool) {.compileTime.} 
   let indices = nnkBracket.newTree(idxIdent)
   var code = nnkStmtList.newTree()
   var root = code
+
   var idx = 1
   while idx < ext.node.len:
     itIdent = ext.nextItNode()
-    var idxInner = genSym(nskVar, "__idxInner__")
     iterators.add(itIdent)
-    indices.add(idxInner)
     let listRef = ext.node[idx]
     idx += 1
-    code.add quote do:
-      var `idxInner` = -1
-      for `itIdent` in `listRef`:
-        `idxInner` += 1
-        nil
+    if indexed:
+      var idxInner = genSym(nskVar, "__idxInner__")
+      indices.add(idxInner)
+      code.add quote do:
+        var `idxInner` = -1
+        for `itIdent` in `listRef`:
+          `idxInner` += 1
+          nil
+    else:
+      code.add quote do:
+        for `itIdent` in `listRef`:
+          nil
     code = code.getStmtList()
+
   let nextIt = ext.nextItNode()
   if indexed:
     code.add quote do:
@@ -1651,7 +1656,7 @@ proc inlineElement(ext: ExtNimNode) {.compileTime.} =
     if ext.itIndex > 0:
       error("$1 supposed to be first - index is $2" % [ext.label, $ext.itIndex], ext.node)
     ext.inlineSeq()
-  
+
   ext.revertIt()
 
 type
@@ -1694,7 +1699,7 @@ proc high*(items: MkListIndexable): int =
   if items.length == -1:
     for it in items.listRef:
       items.length += 1
-  return items.length
+  result = items.length
 
 proc `[]`*[T] (items: MkSliceIndexable[T], idx: Natural): T =
   items.slice.a + T(idx)
@@ -2306,8 +2311,7 @@ proc delegateMacro(a: NimNode, b1: NimNode, td: string,
     else:
       if outer.kind == nnkIdent:
         # shortcut syntax for iterator definition - handle later
-        return quote:
-          `a`
+        return a
       else:
         zfFail("Unexpected expression in macro call on right side of '-->'")
 
@@ -2364,22 +2368,27 @@ proc replArrow(n: NimNode, arrow: string): NimNode =
 
 proc getOp(a: NimNode): string =
   if a.kind == nnkInfix:
-    return a[0].repr
-  return ""
+    result = a[0].repr
+  else:
+    result = ""
 
 proc checkArrow(a: NimNode, b: NimNode, debug: bool = false): (NimNode, NimNode, bool) =
   result = (a, b, debug)
   let op = a.getOp()
   if op == zfArrow or op == zfArrowDbg:
+    # as is infix(-->, left_of_arrow, right_of_arrow)
+    # check recursively on left side
+    let (left, right) = (a[1], a[2])
+    # pack the right side to the other tree
     # also replace the arrows with "."
-    let br = nnkDotExpr.newTree(a[2], b.replArrow(op))
+    let shifted_expr = nnkDotExpr.newTree(right, b.replArrow(op))
     # ensure to use the left-most arrow
-    let op2 = a[1].getOp()
-    if op2 == zfArrow or op2 == zfArrowDbg:
-      return checkArrow(a[1], br, op2 == zfArrowDbg)
-    # this is kind of inefficient - but using br directly does not work here
-    # probably the tree is unbalanced somehow
-    return (a[1], parseExpr(br.repr), op == zfArrowDbg)
+    let op_left = left.getOp()
+    if op_left == zfArrow or op_left == zfArrowDbg:
+      return checkArrow(left, shifted_expr, op_left == zfArrowDbg)
+    # it is inefficient to call `parseExpr` here - but using `shifted_expr` directly does not work here
+    # the trees `shifted_expr` and `parseExpr(shifted_expr.repr)` are different
+    return (left, parseExpr(shifted_expr.repr), op == zfArrowDbg)
 
 ## Alternative call with comma separated arguments.
 macro connect*(args: varargs[untyped]): untyped =

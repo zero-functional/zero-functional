@@ -111,10 +111,7 @@ zf_inline average():
 zf_inline intersect(_):
 # get all elements that are contained in all collections given as parameters
 # this function is built similar to the test case below:
-#   combinations(b,squaresPlusOne()). # combine all elements of a,b...
-#   filter(it[0] == it[1] and it[0] == it[2]). # this is the trickier one
-#   map(it[0])
-
+#   combinations(b,squaresPlusOne()).  
   pre:
     # first build the it[0] == it[1] and ... chain
     var chain = quote: true
@@ -813,8 +810,8 @@ suite "valid chains":
 
     let intersect =
       a() --> combinations(b, squaresPlusOne()). # combine all elements of a,b and squarePlusOne
-        filter(it[0] == it[1] and it[0] == it[
-            2]).     # get all combinations where the elements of each collection are equal
+        # get all combinations where the elements of each collection are equal
+        filter(it[0] == it[1] and it[0] == it[2]).  
         map(it[0]).  # and use the first element
         to(seq[int]) # output type with a() on left side has to be supplied
     check(intersect == @[5, 17])
