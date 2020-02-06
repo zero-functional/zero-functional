@@ -533,11 +533,11 @@ suite "valid chains":
     d.append(1)
     d.append(2)
     d.append(3)
-    let e: DoublyLinkedList[string] = (d --> map(float(it) * 2.4) --> filter(
+    let e: DoublyLinkedList[string] = (d --> map(float(it) * 2.5) --> filter(
         it < 6.0) --> map($it) --> to(list))
-    check((e --> map(it) --> to(seq[string])) == @["2.4", "4.8"])
-    check((e --> map($it) --> to(seq)) == @["2.4", "4.8"])
-    check((e --> map(it) --> to(seq)) == @["2.4", "4.8"])
+    check((e --> map(it) --> to(seq[string])) == @["2.5", "5.0"])
+    check((e --> map($it) --> to(seq)) == @["2.5", "5.0"])
+    check((e --> map(it) --> to(seq)) == @["2.5", "5.0"])
 
   test "combinations":
     ## get indices of items where the difference of the elements is 1
