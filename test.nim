@@ -210,6 +210,13 @@ macro accept*(e: untyped): untyped =
     else:
       discard
 
+template check_same*(a: untyped, b: untyped): untyped =
+  var idx = 0;
+  for it in a:
+    check(idx < len(b))
+    check(abs(it - b[idx]) <= 1.192092895507812e-07)
+    idx += 1
+
 macro compilesMsg(e: untyped): untyped =
   let r = e.repr
   result = quote:
@@ -526,18 +533,16 @@ suite "valid chains":
     d.append(3)
     d --> foreach(it = it * 2) # change d in-place
     check((d --> filterSeq(it > 2)) == @[4, 6])
-    check((d --> mapSeq(float(it) * 1.5)) == @[3.0, 6.0, 9.0])
+    check_same((d --> mapSeq(float(it) * 1.5)), @[3.0f, 6.0f, 9.0f])
 
   test "create DoublyLinkedList":
     var d = initDoublyLinkedList[int]()
     d.append(1)
     d.append(2)
     d.append(3)
-    let e: DoublyLinkedList[string] = (d --> map(float(it) * 2.5) --> filter(
-        it < 6.0) --> map($it) --> to(list))
-    check((e --> map(it) --> to(seq[string])) == @["2.5", "5.0"])
-    check((e --> map($it) --> to(seq)) == @["2.5", "5.0"])
-    check((e --> map(it) --> to(seq)) == @["2.5", "5.0"])
+    let e: DoublyLinkedList[float] = (d --> map(float(it) * 2.5) --> filter(
+        it < 6.0) --> to(list))
+    check_same(e, @[2.5, 5.0])
 
   test "combinations":
     ## get indices of items where the difference of the elements is 1
