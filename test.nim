@@ -77,7 +77,7 @@ proc g(it: int): int =
 
 ## Own implementation of inc(num=1) command which adds num to the iterated.
 ## This could actually easily be done using `map(it+num)` but this shows an easy example of doing an own mapping.
-zf_inline inc(add = 1):
+zfInline inc(add = 1):
   loop: # code that is added inside the loop
     let it = it + add # create new iterator with `let it` and use the previous iterator `it` for it.
 
@@ -85,7 +85,7 @@ zf_inline inc(add = 1):
 ## We try to implement it not refering to filter - just to show how an if condition is handled.
 ## The resulting generated node contains a yield statement which is used by the caller to insert
 ## the next commands in the chain.
-zf_inline filterNot(condition: bool):
+zfInline filterNot(condition: bool):
   loop:
     if not condition:
       yield it
@@ -93,7 +93,7 @@ zf_inline filterNot(condition: bool):
 
 ## Own implementation of average command which calculates the arithmetic mean of
 ## sum / count - where count is the number of items and sum is the sum of all items.
-zf_inline average():
+zfInline average():
   # define used variables (and initialize the result) in the init section
   init:
     result = 0.0 # initialize the result... or infinity maybe? (0 / 0)
@@ -108,7 +108,7 @@ zf_inline average():
     if countIdx > 0:
       result = sum / float(countIdx)
 
-zf_inline intersect(_):
+zfInline intersect(_):
 # get all elements that are contained in all collections given as parameters
 # this function is built similar to the test case below:
 #   combinations(b,squaresPlusOne()).  
@@ -126,7 +126,7 @@ zf_inline intersect(_):
     filter(chain)
     map(it[0])
 
-zf_inline intersectFast(_):
+zfInline intersectFast(_):
   # Faster implementation of intersect that only uses the `pre` section.
   # In the `pre` section the `ext.node` is filled with the generated code.
   # All necessary registrations will be done automatically.
@@ -148,7 +148,7 @@ zf_inline intersectFast(_):
               nil
             break
 
-zf_inline removeDoubles():
+zfInline removeDoubles():
 # remove double elements. Code taken from example "remove doublettes" below
   pre:
     let listRef = ext.listRef
@@ -168,7 +168,7 @@ proc inlineRemove*(ext: ExtNimNode) {.compileTime.} =
   ## two implementations - one for linked lists and one for indexable lists
   ## remove elements when the given condition is true - default value is true (removes all (filtered) elements)
   if ext.isListType():
-    zf_inline_call remove(cond = true):
+    zfInlineCall remove(cond = true):
       pre:
         let listRef = ext.listRef
         let itList = newIdentNode(zfListIteratorName)
@@ -179,7 +179,7 @@ proc inlineRemove*(ext: ExtNimNode) {.compileTime.} =
           listRef.remove(itList)
         result = true
   else:
-    zf_inline_call remove(cond = true):
+    zfInlineCall remove(cond = true):
       pre:
         let listRef = ext.listRef
         ext.forceIndexLoop = true # delete is not supported when iterating over elements -> use index loop (seq modified while iterating over it)
@@ -196,7 +196,7 @@ proc inlineRemove*(ext: ExtNimNode) {.compileTime.} =
 
 ## Registers the extensions for the user commands during compile time
 macro registerExtension(): untyped =
-  # register all extensions that have been defined with the zf_inline macro
+  # register all extensions that have been defined with the zfInline macro
   zfCreateExtension()
 
 ## Macro that checks that the expression compiles

@@ -15,7 +15,7 @@ const zfAccuName* = "accu"
 
 const zfArrow = "-->"
 const zfArrowDbg = "-->>"
-
+const callSuffix = "Call"
 const internalIteratorName = "_" & zfIteratorVariableName.capitalizeAscii()
 const useInternalAccu = zfAccuVariableName != "result"
 const internalAccuName =
@@ -43,7 +43,7 @@ else:
   const defaultResultType = defaultCollectionType & "[int]"
 
 proc printCode(code: NimNode) =
-  echo(repr(code).replace("`gensym", "_").replace("__call__", "Call").replace("__", ""))
+  echo(repr(code).replace("`gensym", "_")#[.replace(callSuffix, "Call")]#.replace("_", ""))
 
 type
 
@@ -772,10 +772,10 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
     var hasLoop = false
     let funName = funDef.label
     var funNameExport = funName
-    let isCall = funName.endsWith("__call__")
-    # when this function has been called with zfInlineCall the "__call__" has to be stripped for the actual zero function name
+    let isCall = funName.endsWith(callSuffix)
+    # when this function has been called with zfInlineCall the callSuffix has to be stripped for the actual zero function name
     if isCall:
-      funNameExport = funName[0..^9]
+      funNameExport = funName[0..^callSuffix.len+1]
       if not (funNameExport in zfFunctionNames):
         addFunction(funNameExport) # only add it once
     else:
@@ -1016,7 +1016,7 @@ macro zfInlineDbg*(header: untyped, body: untyped): untyped =
 ## This can be used to add own implementations of inline-functions with parts in Zero-DSL.
 macro zfInlineCall*(header: untyped, body: untyped, dbg: static[bool] = false): untyped =
   doAssert(header.kind == nnkCall or header.kind == nnkObjConstr)
-  header[0] = newIdentNode(header.label & "__call__")
+  header[0] = newIdentNode(header.label & callSuffix)
   let fun = newIdentNode("inline" & header.label.capitalizeAscii())
   idents(ext)
   let q = zeroParse(header, body)
@@ -1170,10 +1170,10 @@ zfInline indexedFlatten():
 ## `takeWhile(cond)` : Take all elements as long as the given condition is true.
 zfInline takeWhile(cond: bool):
   loop:
-    if not cond:
-      break
-    else:
+    if cond:
       yield it
+    else:
+      break
 
 ## Implementation of the `take` command.
 ## `take(count)` : Take `count` elements.
