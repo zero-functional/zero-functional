@@ -5,10 +5,10 @@ import macros, options, sets, lists, typetraits, strutils, tables
 const zfIteratorVariableName* = "it"
 const zfAccuVariableName* = "a"
 const zfIndexVariableName* = "idx"
-const zfListIteratorName* = "__itList__"
-const zfMinHighVariableName* = "__minHigh__"
-const zfInternalHelperProc* = "__helperProc__"
-const zfInternalIteratorName* = "__autoIter__"
+const zfListIteratorName* = "_ItList"
+const zfMinHighVariableName* = "_MinHigh"
+const zfInternalHelperProc* = "_HelperProc"
+const zfInternalIteratorName* = "_AutoIter"
 const zfIndexedElemName* = "elem"
 const zfIndexedIndexName* = "idx"
 const zfAccuName* = "accu"
@@ -16,10 +16,11 @@ const zfAccuName* = "accu"
 const zfArrow = "-->"
 const zfArrowDbg = "-->>"
 
-const internalIteratorName = "__" & zfIteratorVariableName & "__"
+const internalIteratorName = "_" & zfIteratorVariableName.capitalizeAscii()
 const useInternalAccu = zfAccuVariableName != "result"
-const internalAccuName = if (useInternalAccu): "__" & zfAccuVariableName &
-    "__" else: "result"
+const internalAccuName =
+  if (useInternalAccu): "_" & zfAccuVariableName.capitalizeAscii()
+  else: "result"
 const zfMaxTupleSize = 10
 
 # if set to true: turns on prints code generated with zf (for macros -->, zfun and connect)
@@ -265,7 +266,7 @@ macro idents(args: varargs[untyped]): untyped =
     let idx = s.find("(")
     if idx != -1:
       arg = newIdentNode(s[0..idx-1])
-      s = s[idx+1..s.len-2]
+      s = s[idx+1..^2]
       if s[^1] != '"':
         # refer to the given variable name (without the string quotes)
         result.add(nnkLetSection.newTree(newIdentDefs(arg, newEmptyNode(),
@@ -273,7 +274,7 @@ macro idents(args: varargs[untyped]): untyped =
         continue
       else:
         # remove the quotes
-        s = s[1..s.len-2]
+        s = s[1..^2]
     if $arg == "result":
       arg = newIdentNode("resultIdent")
     result.add quote do:
@@ -2499,4 +2500,3 @@ macro `-->>`*(a: untyped, b: untyped): untyped =
   let dbg = b2.dbgLineInfo(true)
   result = quote:
     arrowCall(`a`, `b2`, `dbg`)
-
