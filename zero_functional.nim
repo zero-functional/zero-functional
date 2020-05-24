@@ -1080,7 +1080,15 @@ proc inlineMap*(ext: ExtNimNode) {.compileTime.} =
   else:
     zfInlineCall map(f):
       loop:
-        let it = f
+        let it =
+          when compiles(f(it)):
+            f(it)
+          elif compiles(it.f):
+            it.f
+          elif compiles(f it):
+            f it
+          else:
+            f
 
 zfInline indexedMap(f):
   loop:
