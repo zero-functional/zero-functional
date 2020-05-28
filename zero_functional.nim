@@ -1066,6 +1066,12 @@ proc inlineMap*(ext: ExtNimNode) {.compileTime.} =
       ext.node = nnkStmtList.newTree(ext.node).add quote do:
         let it = `f`
         discard(it) # iterator might not be used
+  # check for recursive arrow in the map: if used assign another iterator - prevents capturing error of outer iterator
+  elif kind == nnkInfix and (ext.node[1][0].label == zfArrow or ext.node[1][0].label == zfArrowDbg):
+    zf_inline_call map(f):
+      loop:
+        let it = it
+        let it = f
   else:
     zf_inline_call map(f):
       loop:
@@ -1340,7 +1346,7 @@ else:
 ## to the result by subsequent calls.
 proc inlineReduce(ext: ExtNimNode) {.compileTime.} =
   let reduceCmd = ext.label.toReduceCommand()
-  if reduceCmd != none(ReduceCommand):
+  if reduceCmd.isSome():
     # e.g. sum <=> reduce(sum(it))
     let operation =
       case reduceCmd.get():
