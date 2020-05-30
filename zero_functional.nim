@@ -27,7 +27,8 @@ else:
   const debugAll = false
 
 when defined(zf_iter) and defined(js):
-  warning("Iterator result not supported for JS backend")
+  static:
+    warning("Iterator result not supported by JS backend - d:zf_iter will be ignored.")
 when defined(zf_iter) and not defined(js):
   const defaultCollectionType = ""
   const defaultResultType = "iter"
@@ -566,8 +567,9 @@ macro zfAddItemChk*(resultIdent: untyped, idxIdent: untyped, addItem: untyped,
       zfAddItemConvert(`resultIdent`, `idxIdent`, `addItem`)
       # extra cast - see bug https://github.com/nim-lang/Nim/issues/7375
       when not bool(`autoConvert`):
-        warning("Type " & $`addItem`.type & " was automatically converted to " & $`resultType` &
-                "\nTo remove this warning either set second parameter of `to` to true or adapt the result type.")
+        static:
+          warning("Type " & $`addItem`.type & " was automatically converted to fit into " & $`resultType` &
+                  "\nTo remove this warning either set second parameter of `to` to true or adapt the result type.")
     else:
       static:
         when (`resultType`.len == 0):
@@ -1649,7 +1651,7 @@ proc inlineElement(ext: ExtNimNode) {.compileTime.} =
   if ext.node.kind == nnkCall and (ext.itIndex > 0):
     case label:
     of "any":
-      warning("any is deprecated - use exists instead")
+      warning("`any` is deprecated - use exists instead")
       ext.inlineExists()
     else:
       if (label.toReduceCommand() != none(ReduceCommand)):
@@ -2075,7 +2077,8 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
           when not defined(js): # closure not supported by JS backend
             isClosure = true
           else:
-            warning("closure not supported by JS backend")
+            static:
+              warning("Closure not supported by JS backend - argument true of `to` will be ignored.")
         elif closureVal.label != "false":
           zfFail("Unsupported parameter value '$1' to 'createIter'" % [
               closureVal.label])
