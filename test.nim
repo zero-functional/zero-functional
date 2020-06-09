@@ -249,7 +249,7 @@ template reject2*(e: untyped, msg: static[string] = "") =
 
 ## This is kind of "TODO" - when an expression does not compile due to a bug
 ## and it actually should compile, the expression may be surrounded with
-## `CheckIfCompile'. This macro will complain to use `check` when the expression
+## `checkIfCompiles'. This macro will complain to use `check` when the expression
 ## actually gets compilable.
 macro checkIfCompiles*(e: untyped): untyped =
   let content = repr(e)
@@ -586,8 +586,8 @@ suite "valid chains":
     # check that only `2` is in both `a` and `b`
     let both = aArray -->
       combinations(bArray).  # build combinations with b
-      map((itA, itB) = it). # define the iterators a itA (from a) and itB
-      filter(itA == itB).   # restrict to elements in both a and b
+      map((itA, itB) = it).  # define the iterators a itA (from a) and itB
+      filter(itA == itB).    # restrict to elements in both a and b
       map(itA)               # it is still ((itA, itB)) => restrict to itA
     check (both == @[2])
 
@@ -640,6 +640,7 @@ suite "valid chains":
   test "SinglyLinkedList reversing elements":
     var l = a --> map(it) --> to(SinglyLinkedList)
     check(l --> map(it).to(seq) == @[-4, 8, 2])
+  
   test "map with operator access":
     proc gg(): seq[string] =
       @["1", "2", "3"]
@@ -696,7 +697,6 @@ suite "valid chains":
     check(zip(@[3, 2], si) --> map(it[0]+it[1]) == @[4, 4])
     # same for a longer list
     check(zip([3, 2, 1, 0], si) --> map(it[0]+it[1]) == @[4, 4, 4])
-
 
   test "foreach rejects":
     # changing elements in foreach will not work after the commands

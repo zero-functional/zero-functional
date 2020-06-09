@@ -5,10 +5,10 @@ import macros, options, sets, lists, typetraits, strutils, tables
 const zfIteratorVariableName* = "it"
 const zfAccuVariableName* = "a"
 const zfIndexVariableName* = "idx"
-const zfListIteratorName* = "_itList"
-const zfMinHighVariableName* = "_minHigh"
-const zfInternalHelperProc* = "_helperProc"
-const zfInternalIteratorName* = "_autoIter"
+const zfListIteratorName* = "__itList__"
+const zfMinHighVariableName* = "__minHigh__"
+const zfInternalHelperProc* = "__helperProc__"
+const zfInternalIteratorName* = "__autoIter__"
 const zfIndexedElemName* = "elem"
 const zfIndexedIndexName* = "idx"
 const zfAccuName* = "accu"
@@ -16,10 +16,10 @@ const zfAccuName* = "accu"
 const zfArrow = "-->"
 const zfArrowDbg = "-->>"
 const callSuffix = "Call"
-const internalIteratorName = "_" & zfIteratorVariableName#.capitalizeAscii()
+const internalIteratorName = "_" & zfIteratorVariableName
 const useInternalAccu = zfAccuVariableName != "result"
 const internalAccuName =
-  if (useInternalAccu): "_" & zfAccuVariableName#.capitalizeAscii()
+  if (useInternalAccu): "_" & zfAccuVariableName
   else: "result"
 const zfMaxTupleSize = 10
 
@@ -43,7 +43,7 @@ else:
   const defaultResultType = defaultCollectionType & "[int]"
 
 proc printCode(code: NimNode) =
-  echo(repr(code).replace("`gensym", "_")#[.replace(callSuffix, "Call")]#.replace("_", ""))
+  echo(repr(code).replace("`gensym", "_").replace("__call__", "Call").replace("__", ""))
 
 type
 
@@ -1434,7 +1434,7 @@ proc combineWithOtherCollection(ext: ExtNimNode, indexed: bool) {.compileTime.} 
     let listRef = ext.node[idx]
     idx += 1
     if indexed:
-      var idxInner = genSym(nskVar, "_idxInner")
+      var idxInner = genSym(nskVar, "__idxInner__")
       indices.add(idxInner)
       code.add quote do:
         var `idxInner` = -1
