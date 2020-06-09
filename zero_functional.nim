@@ -356,7 +356,7 @@ proc toEnum*[T: typedesc[enum]](key: string; t: T): auto =
 ## Converts the id-string to its ReduceCommand counterpart.
 proc toReduceCommand(key: string): Option[ReduceCommand] =
   if key.startsWith("indexed"):
-    return key[7..key.len-1].toLowerAscii().toReduceCommand()
+    return key[7..^1].toLowerAscii().toReduceCommand()
   result = key.toEnum(ReduceCommand)
 
 {.push inline.}
@@ -1845,13 +1845,13 @@ proc getResType(resultType: ResultType, td: string): (NimNode, bool) {.compileTi
     let idx2 = td.find("[")
     var q: NimNode
     if idx2 != -1:
-      var tdarg = td[idx2+1..td.len-2]
+      var tdarg = td[idx2+1..^2]
       let idxComma = tdarg.find(", ")
       let idxBracket = tdarg.find("[")
       if idxComma != -1 and (idxBracket == -1 or idxBracket > idxComma) and
           resType.id != "array":
         # e.g. array[0..2,...] -> seq[...]
-        tdarg = tdarg[idxComma+2..tdarg.len-1]
+        tdarg = tdarg[idxComma+2..^1]
       q = parseExpr(resType.id & "[" & tdarg & "]")
     else:
       q = quote:
@@ -2008,12 +2008,12 @@ proc checkTo(args: NimNode, td: string): ResultType {.compileTime.} =
       result.id = "DoublyLinkedList"
       result.implicit = true
     elif result.id.startsWith("list["):
-      result.id = "DoublyLinkedList" & result.id[4..result.id.len-1]
+      result.id = "DoublyLinkedList" & result.id[4..^1]
     elif result.id == "set": # set as a shortcut for HashSet
       result.id = "HashSet"
       result.implicit = true
     elif result.id.startsWith("set["):
-      result.id = "HashSet" & result.id[3..result.id.len-1]
+      result.id = "HashSet" & result.id[3..^1]
     elif result.id == "seq":
       result.id = "seq[int]"
       result.implicit = true
@@ -2028,9 +2028,9 @@ proc checkTo(args: NimNode, td: string): ResultType {.compileTime.} =
         # Check forced sequences or lists
         if isSeq or isList:
           if isSeq:
-            arg[0] = newIdentNode(label[0..label.len-4])
+            arg[0] = newIdentNode(label[0..^4])
           elif isList:
-            arg[0] = newIdentNode(label[0..label.len-5])
+            arg[0] = newIdentNode(label[0..^5])
           if isSeq or isList or result.id.len == 0:
             if isSeq:
               result.id = "seq"
