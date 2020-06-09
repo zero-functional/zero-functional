@@ -683,6 +683,14 @@ zfInline index(cond: bool):
 The `cond: bool` definition adds additional compile time checks to the generated macros, so that when using the `index`-function with a different type than `bool` a compile error with the wrong parameter and the expected type is created.
 In this example also the `idx` variable is replaced automatically with the running index that is increment during the loop.
 
+Note: zfCreateExtension must be called in a compile time context. This could be in a static block or macro for example:
+```nim
+# Register above extensions during compile time
+static:
+  zfCreateExtension()
+```
+
+
 #### Special variables
 Special variables for `zfInline` statements are:
 - `it`: when used is the previous iterator, when defined with `let it = ` creates a new iterator, in the `init` section `it` refers to the first element in the underlying collection
@@ -761,13 +769,13 @@ The result type depends on the function used as last parameter.
 |flatten        |   +       |     +      |     +      | coll                        |
 |fold           |           |            |     +      | *                           |
 |foreach        |   +       |     +      |     +      | `void`                      |
-|group          |           |            |     +      | `table[*, seq[*]]`
+|group          |           |            |     +      | `table[*, seq[*]]`          |
 |index          |           |            |     +      | `int`                       |
 |indexedMap     |   +       |     +      |     +      | `seq[(int,*)]`              |
 |enumerate      |           |     +      |     +      | `seq[(int,*)]`              |
 |createIter     |           |            |  virtual   | iterator of given type      |
 |map            |   +       |     +      |     +      | `collType[*]`               |
-|partition      |           |            |     +      | `(yes:seq[*], no:seq[*])`
+|partition      |           |            |     +      | `(yes:seq[*], no:seq[*])`   |
 |reduce         |           |            |     +      | *                           |
 |sub            |   +       |     +      |     +      | part coll / zeroed array    |
 |split          |           |            |     +      | `(seq[*],...seq[*])`        |
