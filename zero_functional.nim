@@ -5,10 +5,10 @@ import macros, options, sets, lists, typetraits, strutils, tables
 const zfIteratorVariableName* = "it"
 const zfAccuVariableName* = "a"
 const zfIndexVariableName* = "idx"
-const zfListIteratorName* = "_ItList"
-const zfMinHighVariableName* = "_MinHigh"
-const zfInternalHelperProc* = "_HelperProc"
-const zfInternalIteratorName* = "_AutoIter"
+const zfListIteratorName* = "_itList"
+const zfMinHighVariableName* = "_minHigh"
+const zfInternalHelperProc* = "_helperProc"
+const zfInternalIteratorName* = "_autoIter"
 const zfIndexedElemName* = "elem"
 const zfIndexedIndexName* = "idx"
 const zfAccuName* = "accu"
@@ -16,10 +16,10 @@ const zfAccuName* = "accu"
 const zfArrow = "-->"
 const zfArrowDbg = "-->>"
 const callSuffix = "Call"
-const internalIteratorName = "_" & zfIteratorVariableName.capitalizeAscii()
+const internalIteratorName = "_" & zfIteratorVariableName#.capitalizeAscii()
 const useInternalAccu = zfAccuVariableName != "result"
 const internalAccuName =
-  if (useInternalAccu): "_" & zfAccuVariableName.capitalizeAscii()
+  if (useInternalAccu): "_" & zfAccuVariableName#.capitalizeAscii()
   else: "result"
 const zfMaxTupleSize = 10
 
@@ -52,25 +52,25 @@ type
     ## 'to' - is a virtual command
     all, combinations, concat, count, createIter, drop, dropWhile, exists,
         filter, find, flatten, fold, foreach,
-    index, indexedCombinations, indexedFlatten, indexedMap, indexedReduce, map,
-        reduce, sub, zip, take, takeWhile, to, uniq
+    index, indexedCombinations, indexedFlatten, indexedMap, enumerate, indexedReduce,
+        map, reduce, sub, zip, take, takeWhile, to, uniq
 
   ReduceCommand {.pure.} = enum
     ## additional commands that operate as reduce command
     max, min, product, sum
 
   ResultType = object
-    id: string     ## the result type to create
-    implicit: bool ## set to true when the user did not give an explicit type
-    autoConvert: bool ## set to true when the second parameter of `to` is true - then the conversion (e.g. between numeric types) is tried automatically
+    id: string              ## the result type to create
+    implicit: bool          ## set to true when the user did not give an explicit type
+    autoConvert: bool       ## set to true when the second parameter of `to` is true - then the conversion (e.g. between numeric types) is tried automatically
 
-  ExtNimNode* = ref object ## Store additional info the current NimNode used in the inline... functions
+  ExtNimNode* = ref object  ## Store additional info the current NimNode used in the inline... functions
     node*: NimNode          ## the current working node / the current function
     nodeIndex: int          ## the position in args of the current working node
     prevItIndex*: int       ## index used for the previous iterator
-    itIndex*: int ## index used for the created iterator - 0 for the first. Will be incremented automatically.
+    itIndex*: int           ## index used for the created iterator - 0 for the first. Will be incremented automatically.
     isLastItem: bool        ## true if the current item is the last item in the command chain
-    initials*: NimNode ## code section before the first iterator where variables can be defined
+    initials*: NimNode      ## code section before the first iterator where variables can be defined
     endLoop*: NimNode       ## code at the end of the for / while loop
     finals*: NimNode        ## code to set the final operations, e.g. the result
     listRef*: NimNode       ## reference to the list the iterator is working on
@@ -78,11 +78,11 @@ type
     typeDescription: string ## type description of the outer list type
     resultType: ResultType  ## result type when explicitly set
     needsIndex*: bool       ## true if the idx-variable is needed
-    hasMinHigh: bool ## true if the minHigh variable is defined and the loop should use indices rather than iterator
+    hasMinHigh: bool        ## true if the minHigh variable is defined and the loop should use indices rather than iterator
     isIter: bool            ## true if an iterator shall be created
-    adapted: int ## internally used to check that all iterators were created before the adapt call (otherwise adapt refers to an old iterator)
-    elemAdded: bool ## set when `addElem` has been called. Needed for generating collection output.
-    forceIndexLoop: bool ## set when a loop with index rather than with iterator is needed (i.e. the loop changes the iterated collection)
+    adapted: int            ## internally used to check that all iterators were created before the adapt call (otherwise adapt refers to an old iterator)
+    elemAdded: bool         ## set when `addElem` has been called. Needed for generating collection output.
+    forceIndexLoop: bool    ## set when a loop with index rather than with iterator is needed (i.e. the loop changes the iterated collection)
     delegateUntil: int      ## last argument index that is part of a "delegate" chain
 
   ## used for "combinations" command as output
@@ -1073,7 +1073,7 @@ proc inlineMap*(ext: ExtNimNode) {.compileTime.} =
         discard(it) # iterator might not be used
   # check for recursive arrow in the map: if used assign another iterator - prevents capturing error of outer iterator
   elif kind == nnkInfix and (ext.node[1][0].label == zfArrow or ext.node[1][0].label == zfArrowDbg):
-    zf_inline_call map(f):
+    zfInlineCall map(f):
       loop:
         let it = it
         let it = f
@@ -1093,6 +1093,10 @@ proc inlineMap*(ext: ExtNimNode) {.compileTime.} =
 zfInline indexedMap(f):
   loop:
     let it = mkIndexedResult(idx, f)
+
+zfInline enumerate():
+  loop:
+    let it = mkIndexedResult(idx, it)
 
 ## Implementation of the 'filter' command.
 ## The trailing commands execution depend on the filter condition to be true.
@@ -1256,9 +1260,13 @@ zfInline exists(search: bool):
 ## Searches the input for a given expression. Returns an option value.
 zfInline find(cond: bool):
   init:
-    result = none(it.type)
+    var initAccu = true
   loop:
-    if cond:
+    if initAccu:
+      # type of it must be assigned here because it may have been changed
+      result = none(it.type)
+      initAccu = false
+    elif cond:
       return some(it)
 
 ## Implementation of the 'all' command.
@@ -1322,7 +1330,7 @@ proc inlineForeach*(ext: ExtNimNode) {.compileTime.} =
     adaptedExpression = nnkAsgn.newTree(adaptedExpression[0], adaptedExpression[1])
   ext.node = nnkStmtList.newTree().add quote do:
     `adaptedExpression`
-
+  
 ## Implementation of the 'index' command.
 ## Returns the index of the element in the input list when the given expression was found or -1 if not found.
 zfInline index(cond: bool):
@@ -1426,7 +1434,7 @@ proc combineWithOtherCollection(ext: ExtNimNode, indexed: bool) {.compileTime.} 
     let listRef = ext.node[idx]
     idx += 1
     if indexed:
-      var idxInner = genSym(nskVar, "__idxInner__")
+      var idxInner = genSym(nskVar, "_idxInner")
       indices.add(idxInner)
       code.add quote do:
         var `idxInner` = -1
@@ -1609,7 +1617,7 @@ proc inlineSeq(ext: ExtNimNode) {.compileTime.} =
   elif ext.isListType():
     # list iterator implemnentation
     let listRef = ext.listRef
-    idents(itList(zfListIteratorName), itNext("__itListNext__"))
+    idents(itList(zfListIteratorName), itNext("_itListNext"))
     ext.node = quote:
       var `itList` = `listRef`.head
       while `itList` != nil:
@@ -2103,7 +2111,7 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
 
     if isClosure:
       # create closure iterator that delegates to the inline iterator
-      let inlineName = newIdentNode(iterName.label & "_inline")
+      let inlineName = newIdentNode(iterName.label & "Inline")
       let it = newIdentNode(zfIteratorVariableName)
       iterNode = quote:
         iterator `inlineName`(): auto {.inline.} =
