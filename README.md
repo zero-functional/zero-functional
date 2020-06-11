@@ -620,20 +620,20 @@ The vanilla `inline`-proc implementations should follow certain rules.
   - `ext.nextItNode()` = generates a new iterator for the current block. This is the (intermediate) result of the current operation that can be used with the next function
 - check of parameters / number of parameters has to be done in the implementation 
 - use `zfFail()` if any checks fail
-- register functions that use neither `zf_inline` nor `zf_inline_call` using `zfAddFunction`
+- register functions that use neither `zfInline` nor `zfInlineCall` using `zfAddFunction`
 - functions that create another sequence have to be registered with `zfAddSequenceHandlers`
-- finally call `zfCreateExtension` after all `zf_inline...` definitions and `zfAddFunction` calls - before using the actual function implementation
+- finally call `zfCreateExtension` after all `zfInline...` definitions and `zfAddFunction` calls - before using the actual function implementation
 
 ### Writing extensions with Zero-DSL
 Example - implement the (simple) map function:
 ```nim
-zf_inline map(f):
+zfInline map(f):
   loop:
     let it = f # create the next iterator in the loop setting it to the given parameter of the map function
 ```
 
-`zf_inline` is the actual macro that takes the created function name (here: `map`) and its parameters and a body with different sections as input.
-`zf_inline_dbg` will print the generated code `proc inlineMap` (see below).
+`zfInline` is the actual macro that takes the created function name (here: `map`) and its parameters and a body with different sections as input.
+`zfInline_dbg` will print the generated code `proc inlineMap` (see below).
 
 The sections directly map to their counterparts in `ExtNimNode`:
 - `pre` prepare section: initialize variables and constants. It is possible to do the entire implementation in the `pre` section.
@@ -666,14 +666,14 @@ proc inlineMap*(ext: ExtNimNode) {.compileTime.} =
 The Zero-DSL `map` function does not set the `result` as opposed to the `count` or `index` definition below - hence the result type is a collection result type, which is determined automatically by the zero_functional framework.
 The `it` again is seen as keyword and the definition `let it = ...` will internally set the new iterator value which is consequently used by the next functions. In the generated macro it is replaced by the call `ext.nextItNode`.
 
-While Zero-DSL is quite powerful, not all possibilities can be handled by it when implementing a function. For instance the `foreach` implementation is done completely manually and `reduce` and other functions use the macro `zf_inline_call` which provides Zero-DSL within a manual function implementation and also registers the function name.
+While Zero-DSL is quite powerful, not all possibilities can be handled by it when implementing a function. For instance the `foreach` implementation is done completely manually and `reduce` and other functions use the macro `zfInlineCall` which provides Zero-DSL within a manual function implementation and also registers the function name.
 The signature for creating an inline function is as in the `inlineMap` example above - each function `foo` is implemented by its `inlineFoo*(ext: ExtNimNode)` counterpart.
 
-If the Zero-DSL should fail to create an own implementation of a function then `zf_inline_dbg` instead of `zf_inline` can be used to print the created function to the console, copy it - remember to add the `*` to the name - and adapt the code.
+If the Zero-DSL should fail to create an own implementation of a function then `zfInline_dbg` instead of `zfInline` can be used to print the created function to the console, copy it - remember to add the `*` to the name - and adapt the code.
 
 It is possible to set parameter types for the functions - for example in the `index` implementation:
 ```nim
-zf_inline index(cond: bool):
+zfInline index(cond: bool):
   init:
     result = -1 # index not found
   loop:
@@ -683,8 +683,16 @@ zf_inline index(cond: bool):
 The `cond: bool` definition adds additional compile time checks to the generated macros, so that when using the `index`-function with a different type than `bool` a compile error with the wrong parameter and the expected type is created.
 In this example also the `idx` variable is replaced automatically with the running index that is increment during the loop.
 
+Note: zfCreateExtension must be called in a compile time context. This could be in a static block or macro for example:
+```nim
+# Register above extensions during compile time
+static:
+  zfCreateExtension()
+```
+
+
 #### Special variables
-Special variables for `zf_inline` statements are:
+Special variables for `zfInline` statements are:
 - `it`: when used is the previous iterator, when defined with `let it = ` creates a new iterator, in the `init` section `it` refers to the first element in the underlying collection
 - `idx`: the running index in the loop
 - `result`: the overall result and return type of the operation
@@ -695,7 +703,7 @@ See `intersect` or `removeDoubles` implementation in [test.nim](test.nim) as an 
 #### Setting the result
 Example of `count` that sets a result:
 ```nim
-zf_inline count():
+zfInline count():
   init:
     result = 0
   loop:
@@ -705,23 +713,23 @@ Functions that set a result in any section are considered final functions - no o
 
 Example of `filter` that returns a collection / iterator:
 ```nim
-zf_inline filter(cond: bool):
+zfInline filter(cond: bool):
   loop:
     if cond:
       yield it # add the current iterator to the resulting collection
 ```
 
 ### Defering to Zero-DSL inside plain nim
-As Zero-DSL is limited in its expressiveness - e.g. there is no possibility to defer to a different loop implementation depending on the input type - it is possible to defer to different Zero-DSL implementations in the nim code using `zf_inline_call`. Example calling two implementations - one specialized to work on lists, the other for sequences:
+As Zero-DSL is limited in its expressiveness - e.g. there is no possibility to defer to a different loop implementation depending on the input type - it is possible to defer to different Zero-DSL implementations in the nim code using `zfInlineCall`. Example calling two implementations - one specialized to work on lists, the other for sequences:
 ```nim
 proc inlineFoo*(ext: ExtNimNode) {.compileTime.} =
   if ext.isListType():
     # provide list implementation
-    zf_inline_call foo(param):
+    zfInlineCall foo(param):
       ... 
   else:
     # provide plain implementation (e.g. using [])
-    zf_inline_call reduce(op):
+    zfInlineCall reduce(op):
       ...
 ```
 
@@ -729,7 +737,7 @@ proc inlineFoo*(ext: ExtNimNode) {.compileTime.} =
 Zero-DSL can create commands as a sequence from already existing commands using the `delegate` section - which essentially calls the functions in that section.
 Example is the `removeDoubles` function that returns the input sequence with unique elements. See code in [test.nim](test.nim).
 ```nim
-zf_inline removeDoubles():
+zfInline removeDoubles():
 # remove double elements. 
   pre:
     # initialize variables in `ext` that are used below
@@ -761,12 +769,13 @@ The result type depends on the function used as last parameter.
 |flatten        |   +       |     +      |     +      | coll                        |
 |fold           |           |            |     +      | *                           |
 |foreach        |   +       |     +      |     +      | `void`                      |
-|group          |           |            |     +      | `table[*, seq[*]]`
+|group          |           |            |     +      | `table[*, seq[*]]`          |
 |index          |           |            |     +      | `int`                       |
 |indexedMap     |   +       |     +      |     +      | `seq[(int,*)]`              |
+|enumerate      |           |     +      |     +      | `seq[(int,*)]`              |
 |createIter     |           |            |  virtual   | iterator of given type      |
 |map            |   +       |     +      |     +      | `collType[*]`               |
-|partition      |           |            |     +      | `(yes:seq[*], no:seq[*])`
+|partition      |           |            |     +      | `(yes:seq[*], no:seq[*])`   |
 |reduce         |           |            |     +      | *                           |
 |sub            |   +       |     +      |     +      | part coll / zeroed array    |
 |split          |           |            |     +      | `(seq[*],...seq[*])`        |

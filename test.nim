@@ -77,7 +77,7 @@ proc g(it: int): int =
 
 ## Own implementation of inc(num=1) command which adds num to the iterated.
 ## This could actually easily be done using `map(it+num)` but this shows an easy example of doing an own mapping.
-zf_inline inc(add = 1):
+zfInline inc(add = 1):
   loop: # code that is added inside the loop
     let it = it + add # create new iterator with `let it` and use the previous iterator `it` for it.
 
@@ -85,7 +85,7 @@ zf_inline inc(add = 1):
 ## We try to implement it not refering to filter - just to show how an if condition is handled.
 ## The resulting generated node contains a yield statement which is used by the caller to insert
 ## the next commands in the chain.
-zf_inline filterNot(condition: bool):
+zfInline filterNot(condition: bool):
   loop:
     if not condition:
       yield it
@@ -93,7 +93,7 @@ zf_inline filterNot(condition: bool):
 
 ## Own implementation of average command which calculates the arithmetic mean of
 ## sum / count - where count is the number of items and sum is the sum of all items.
-zf_inline average():
+zfInline average():
   # define used variables (and initialize the result) in the init section
   init:
     result = 0.0 # initialize the result... or infinity maybe? (0 / 0)
@@ -108,7 +108,7 @@ zf_inline average():
     if countIdx > 0:
       result = sum / float(countIdx)
 
-zf_inline intersect(_):
+zfInline intersect(_):
 # get all elements that are contained in all collections given as parameters
 # this function is built similar to the test case below:
 #   combinations(b,squaresPlusOne()).  
@@ -126,7 +126,7 @@ zf_inline intersect(_):
     filter(chain)
     map(it[0])
 
-zf_inline intersectFast(_):
+zfInline intersectFast(_):
   # Faster implementation of intersect that only uses the `pre` section.
   # In the `pre` section the `ext.node` is filled with the generated code.
   # All necessary registrations will be done automatically.
@@ -148,7 +148,7 @@ zf_inline intersectFast(_):
               nil
             break
 
-zf_inline removeDoubles():
+zfInline removeDoubles():
 # remove double elements. Code taken from example "remove doublettes" below
   pre:
     let listRef = ext.listRef
@@ -168,7 +168,7 @@ proc inlineRemove*(ext: ExtNimNode) {.compileTime.} =
   ## two implementations - one for linked lists and one for indexable lists
   ## remove elements when the given condition is true - default value is true (removes all (filtered) elements)
   if ext.isListType():
-    zf_inline_call remove(cond = true):
+    zfInlineCall remove(cond = true):
       pre:
         let listRef = ext.listRef
         let itList = newIdentNode(zfListIteratorName)
@@ -179,7 +179,7 @@ proc inlineRemove*(ext: ExtNimNode) {.compileTime.} =
           listRef.remove(itList)
         result = true
   else:
-    zf_inline_call remove(cond = true):
+    zfInlineCall remove(cond = true):
       pre:
         let listRef = ext.listRef
         ext.forceIndexLoop = true # delete is not supported when iterating over elements -> use index loop (seq modified while iterating over it)
@@ -196,7 +196,7 @@ proc inlineRemove*(ext: ExtNimNode) {.compileTime.} =
 
 ## Registers the extensions for the user commands during compile time
 macro registerExtension(): untyped =
-  # register all extensions that have been defined with the zf_inline macro
+  # register all extensions that have been defined with the zfInline macro
   zfCreateExtension()
 
 ## Macro that checks that the expression compiles
@@ -210,7 +210,7 @@ macro accept*(e: untyped): untyped =
     else:
       discard
 
-template check_same*(a: untyped, b: untyped): untyped =
+template checkSame*(a: untyped, b: untyped): untyped =
   var idx = 0;
   for it in a:
     check(idx < len(b))
@@ -249,9 +249,9 @@ template reject2*(e: untyped, msg: static[string] = "") =
 
 ## This is kind of "TODO" - when an expression does not compile due to a bug
 ## and it actually should compile, the expression may be surrounded with
-## `check_if_compile'. This macro will complain to use `check` when the expression
+## `checkIfCompiles'. This macro will complain to use `check` when the expression
 ## actually gets compilable.
-macro check_if_compiles*(e: untyped): untyped =
+macro checkIfCompiles*(e: untyped): untyped =
   let content = repr(e)
   let msg = "[WARN]: Expression compiles. Use 'check' around '" & `content` & "'"
 
@@ -273,6 +273,13 @@ suite "valid chains":
 
   test "map":
     check((a --> map(it - 1)) == @[1, 7, -5])
+
+  test "map with different proc syntaxes":
+    proc sub1(i: int): int = i - 1
+    check((a --> map(proc(i: int): int = i - 1)) == @[1, 7, -5])
+    check((a --> map(sub1)) == @[1, 7, -5])
+    check((a --> map(sub1 it)) == @[1, 7, -5])
+    check((a --> map(it.sub1)) == @[1, 7, -5])
 
   test "filter":
     check((a --> filter(it > 2)) == @[8])
@@ -307,9 +314,13 @@ suite "valid chains":
 
   test "map with fold":
     check((a --> map(g(it)) --> fold(0, a + it)) == 10)
+    check((a --> map(`$`) --> fold("", a & it)) == "28-4")    
 
   test "map with changed type":
     check((a --> mapSeq($it)) == @["2", "8", "-4"])
+
+  test "find with changed type":
+    check((a --> map(`$`) --> find(it == "-4")) == some("-4"))
 
   test "filter with exists":
     check(not (a --> filter(it > 2) --> exists(it == 4)))
@@ -323,14 +334,14 @@ suite "valid chains":
     check(sum == 6)
 
   test "foreach with index":
-    var sum_until_it_gt_2 = 0
-    check((a --> foreach(sum_until_it_gt_2 += it).index(it > 2)) == 1)
-    check(sum_until_it_gt_2 == 10) # loop breaks when condition in index is true
+    var sumUntilItGt2 = 0
+    check((a --> foreach(sumUntilItGt2 += it).index(it > 2)) == 1)
+    check(sumUntilItGt2 == 10) # loop breaks when condition in index is true
 
   test "foreach change in-place":
-    var my_seq = @[2, 3, 4]
-    my_seq --> foreach(it = idx * it)
-    check(my_seq == @[0, 3, 8])
+    var mySeq = @[2, 3, 4]
+    mySeq --> foreach(it = idx * it)
+    check(mySeq == @[0, 3, 8])
 
   test "multiple methods":
     let n = zip(a, b) -->
@@ -385,6 +396,11 @@ suite "valid chains":
     check((aArray --> indexedMap(it)) == @[(0, 2), (1, 8), (2, -4)])
     check((aArray --> indexedMap(it + 2) --> map(it.idx + it.elem)) ==
         @[4, 11, 0])
+        
+  test "array enumerate":
+    check((aArray --> enumerate()) == @[(0, 2), (1, 8), (2, -4)])
+    check((aArray --> enumerate() --> map(it.idx + it.elem + 2)) ==
+        @[4, 11, 0])
 
   test "array fold":
     check((aArray --> fold(0, a + it)) == 6)
@@ -414,14 +430,14 @@ suite "valid chains":
     check(sum == 6)
 
   test "array foreach with index":
-    var sum_until_it_gt_2 = 0
-    check((aArray --> foreach(sum_until_it_gt_2 += it) --> index(it > 2)) == 1)
-    check(sum_until_it_gt_2 == 10) # loop breaks when condition in index is true
+    var sumUntilItGt2 = 0
+    check((aArray --> foreach(sumUntilItGt2 += it) --> index(it > 2)) == 1)
+    check(sumUntilItGt2 == 10) # loop breaks when condition in index is true
 
   test "array with foreach change in-place":
-    var my_array = [2, 3, 4]
-    my_array --> foreach(it = idx * it)
-    check(my_array == [0, 3, 8])
+    var myArray = [2, 3, 4]
+    myArray --> foreach(it = idx * it)
+    check(myArray == [0, 3, 8])
 
   test "array":
     let n = zip(aArray, bArray) -->
@@ -533,7 +549,7 @@ suite "valid chains":
     d.append(3)
     d --> foreach(it = it * 2) # change d in-place
     check((d --> filterSeq(it > 2)) == @[4, 6])
-    check_same((d --> mapSeq(float(it) * 1.5)), @[3.0f, 6.0f, 9.0f])
+    checkSame((d --> mapSeq(float(it) * 1.5)), @[3.0f, 6.0f, 9.0f])
 
   test "create DoublyLinkedList":
     var d = initDoublyLinkedList[int]()
@@ -542,7 +558,7 @@ suite "valid chains":
     d.append(3)
     let e: DoublyLinkedList[float] = (d --> map(float(it) * 2.5) --> filter(
         it < 6.0) --> to(list))
-    check_same(e, @[2.5, 5.0])
+    checkSame(e, @[2.5, 5.0])
 
   test "combinations":
     ## get indices of items where the difference of the elements is 1
@@ -568,11 +584,11 @@ suite "valid chains":
     check(c --> all(it == b[idx]))
 
     # check that only `2` is in both `a` and `b`
-    let both = a_array -->
-      combinations(b_array).  # build combinations with b
-      map((it_a, it_b) = it). # define the iterators a it_a (from a) and it_b
-      filter(it_a == it_b).   # restrict to elements in both a and b
-      map(it_a)               # it is still ((it_a, it_b)) => restrict to it_a
+    let both = aArray -->
+      combinations(bArray).  # build combinations with b
+      map((itA, itB) = it).  # define the iterators a itA (from a) and itB
+      filter(itA == itB).    # restrict to elements in both a and b
+      map(itA)               # it is still ((itA, itB)) => restrict to itA
     check (both == @[2])
 
     # check indexedCombinations with 2 different collections
@@ -624,7 +640,7 @@ suite "valid chains":
   test "SinglyLinkedList reversing elements":
     var l = a --> map(it) --> to(SinglyLinkedList)
     check(l --> map(it).to(seq) == @[-4, 8, 2])
-
+  
   test "map with operator access":
     proc gg(): seq[string] =
       @["1", "2", "3"]
@@ -682,22 +698,21 @@ suite "valid chains":
     # same for a longer list
     check(zip([3, 2, 1, 0], si) --> map(it[0]+it[1]) == @[4, 4, 4])
 
-
   test "foreach rejects":
     # changing elements in foreach will not work after the commands
     # map, indexedMap, combinations, flatten and zip
     # as they already create different collections
-    var my_seq = @[2, 3, 5, 7]
-    var my_seq2 = @[1, 2, 3, 4]
-    my_seq --> foreach(it = it + 1)
-    check(my_seq == @[3, 4, 6, 8])
+    var mySeq = @[2, 3, 5, 7]
+    var mySeq2 = @[1, 2, 3, 4]
+    mySeq --> foreach(it = it + 1)
+    check(mySeq == @[3, 4, 6, 8])
     const errMsg = "Adapted list cannot be changed in-place!"
-    reject(my_seq --> map(it) --> foreach(it = it + 1), errMsg)
-    reject(my_seq --> indexedMap(it) --> foreach(it[1] = it[1] + 1), errMsg)
-    reject(my_seq --> flatten() --> foreach(it = it + 1), errMsg)
-    reject(zip(my_seq, my_seq2) --> foreach(it[0] = it[0] + 1), errMsg)
-    check(my_seq == @[3, 4, 6, 8])
-    discard my_seq2
+    reject(mySeq --> map(it) --> foreach(it = it + 1), errMsg)
+    reject(mySeq --> indexedMap(it) --> foreach(it[1] = it[1] + 1), errMsg)
+    reject(mySeq --> flatten() --> foreach(it = it + 1), errMsg)
+    reject(zip(mySeq, mySeq2) --> foreach(it[0] = it[0] + 1), errMsg)
+    check(mySeq == @[3, 4, 6, 8])
+    discard mySeq2
 
   test "closure parameters":
     # x is an illegal capture - so this will be rejected
@@ -997,6 +1012,10 @@ suite "valid chains":
     # uniqueness is only determined consecutively
     check(@[1, 1, 2, 1, 1, 3, 1] --> uniq() == @[1, 2, 1, 3, 1])
 
+  # test "uniq after changed type":
+  #   check(@[1, 2, 2, 2, 2, 3, 4, 4, 4, 5] --> map($it) --> uniq() == @["1", "2", "3", "4", "5"])
+  #   check(@[1, 1, 2, 1, 1, 3, 1] --> map($it) --> uniq() == @["1", "2", "3", "4", "5"])
+
   test "inner exists":
     let x = @[1, 2, 3]
     let y = @[2, 5, 6]
@@ -1004,9 +1023,9 @@ suite "valid chains":
     check(x --> map(a = it) --> exists(y --> exists(a == it)))
     check(x --> (a) --> exists(y --> exists(a == it)))
     check(not (x --> map(a = it) --> exists(z --> exists(a == it))))
-    check(x --> (it_x) --> exists(y --> (it_y) --> exists(it_x == it_y)))
+    check(x --> (itX) --> exists(y --> (itY) --> exists(itX == itY)))
     # alternative (maybe nicer to read) bracketing
-    check((x --> it_x) --> exists((y --> it_y) --> exists(it_x == it_y)))
+    check((x --> itX) --> exists((y --> itY) --> exists(itX == itY)))
     check((a --> x) --> exists((b --> y) --> exists(x == y)))
 
     let b = x.zfun(a):
@@ -1016,11 +1035,11 @@ suite "valid chains":
     check(not b)
 
   test "concat":
-    proc concat_to_seq(): auto =
+    proc concatToSeq(): auto =
       concat(a, b, [7]) --> to(seq)
-    check(concat_to_seq() == @[2, 8, -4, 0, 1, 2, 7])
+    check(concatToSeq() == @[2, 8, -4, 0, 1, 2, 7])
     check(concat([1], @[2], (3, 4)) --> map($it) == @["1", "2", "3", "4"])
-    zf_concat(con, @[1], (2, 3, 4))
+    zfConcat(con, @[1], (2, 3, 4))
     check(con() --> to(seq) == @[1, 2, 3, 4])
 
   test "partition":
@@ -1029,6 +1048,12 @@ suite "valid chains":
     let p = a --> partition(it.isEven())
     check(p.yes == @[2, 4, 6])
     check(p.no == @[1, 3, 5])
+
+  # test "partition after changed type":
+  #   let a = @[111, 2, 33, 4, 5555, 6]
+  #   let p = a --> map($it) --> partition(it.len() == 1)
+  #   check(p.yes == @["2", "4", "6"])
+  #   check(p.no == @["111", "33", "5555"])
 
   test "grouping":
     proc isEven(i: int): bool = (i and 1) == 0
@@ -1041,4 +1066,17 @@ suite "valid chains":
     let m = @[(1, "one"), (2, "two"), (3, "three")] --> group(it[1][^1])
     check(m['e'] == @[(1, "one"), (3, "three")])
     check(m['o'] == @[(2, "two")])
+
+  # test "grouping after changed type":
+    # proc isEven(i: string): bool = (i.len() and 1) == 0
+    # let a = @[11, 2, 33, 4, 5555, 6]
+    # let p = a --> map($it) --> group(it.isEven())
+    # check(p[true] == @["2", "4", "6"])
+    # check(p[false] == @["11", "33", "5555"])
+
+    # group by last character
+    # proc stringyifyFirst(t: (int, string)): (string, string) = ($t[0], t[1])
+    # let m = @[(1, "one"), (2, "two"), (3, "three")] --> map(stringyifyFirst) --> group(it[1][^1])
+    # check(m['e'] == @[(1, "one"), (3, "three")])
+    # check(m['o'] == @[(2, "two")])
 
