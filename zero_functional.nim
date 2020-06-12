@@ -1147,10 +1147,13 @@ zfInline uniq():
 ## Applies each element to the discriminator function and sorts the elements a tuple with to sequences.
 ## The named tuple element `yes` contains all the elements matching the filter, `no` contains the rest.
 zfInline partition(discriminator: bool):
+  init:
+    var initialized = false
   loop:
-    once:
+    if not initialized:
       result = (yes: newSeq[type(it)](),
                 no: newSeq[type(it)]())
+      initialized = true
     if discriminator:
       result.yes.add(it)
     else:
@@ -1160,11 +1163,13 @@ zfInline partition(discriminator: bool):
 ## Applies each element to the discriminator and adds the result to a table as key adding the elements to a sequence
 ## for each key.
 zfInline group(discriminator):
+  init:
+    var initialized = false
   loop:
-    once:
+    if not initialized:
       result = initOrderedTable[type(discriminator), seq[type(it)]]()
+      initialized = true
     result.mgetOrPut(discriminator, @[]).add(it)
-
 
 ## Implementation of the 'flatten' command.
 ## E.g. @[@[1,2],@[3],@[4,5,6]] --> flatten() == @[1,2,3,4,5,6]
@@ -1271,8 +1276,6 @@ proc inlineSub(ext: ExtNimNode) {.compileTime.} =
 ## Implementation of the 'exists' command.
 ## Searches the input for a given expression. If one is found "true" is returned, else "false".
 zfInline exists(search: bool):
-  init:
-    result = false
   loop:
     if search:
       return true
@@ -1281,8 +1284,6 @@ zfInline exists(search: bool):
 ## Searches the input for a given expression. Returns an option value.
 zfInline find(cond: bool):
   loop:
-    once:
-      result = none(it.type)
     if cond:
       return some(it)
 
