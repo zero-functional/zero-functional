@@ -96,11 +96,12 @@ zfInline filterNot(condition: bool):
 zfInline average():
   # define used variables (and initialize the result) in the init section
   init:
-    result = 0.0 # initialize the result... or infinity maybe? (0 / 0)
     var countIdx = 0
     var sum = 0.0
   # executed for each item: increment count and calculate the sum
   loop:
+    once:
+      result = 0.0 # initialize the result... or infinity maybe? (0 / 0)
     countIdx += 1
     sum += float(it)
   # after the loop: calculate the result
@@ -172,9 +173,9 @@ proc inlineRemove*(ext: ExtNimNode) {.compileTime.} =
       pre:
         let listRef = ext.listRef
         let itList = newIdentNode(zfListIteratorName)
-      init:
-        result = false
       loop:
+        once:
+          result = false
         if cond:
           listRef.remove(itList)
         result = true
@@ -186,9 +187,9 @@ proc inlineRemove*(ext: ExtNimNode) {.compileTime.} =
         static:
           when not (listRef is FiniteIndexableLenIter):
             zfFail("Only index with len types supported for remove")
-      init:
-        result = false
       loop:
+        once:
+          result = false
         if cond:
           result = true
           listRef.delete(idx)
@@ -287,11 +288,21 @@ suite "valid chains":
   test "exists":
     check((a --> exists(it > 0)))
 
+  test "exists with changed type":
+    check((a --> map($it) --> exists(it.len > 0)))
+
   test "all":
     check(not (a --> all(it > 0)))
 
+  test "all with changed type":
+    check(a --> map(`$`) --> all(it.len > 0)) 
+
   test "index":
     check((a --> index(it > 4)) == 1)
+
+  test "index with changed type":
+    let d = @[1,22,333,444]
+    check((d --> map($it) --> index(it.len > 2)) == 2)
 
   test "find":
     check((a --> find(it > 2)) == some(8))
@@ -302,6 +313,9 @@ suite "valid chains":
 
   test "fold":
     check((a --> fold(0, a + it)) == 6)
+
+  test "fold with changed type":
+    check((a --> map($it) --> fold("", a & it)) == "28-4")
 
   test "map with filter":
     check((a --> map(it + 2) --> filter(it mod 4 == 0)) == @[4])
@@ -521,10 +535,26 @@ suite "valid chains":
     let e: seq[int] = @[]
     let res: seq[int] = @[]
     check((e --> all(false)) == true)
+    check((e --> all(true)) == true)
     check((e --> exists(false)) == false)
+    check((e --> exists(true)) == false)
+    check((e --> find(false)) == none(int))
+    check((e --> find(true)) == none(int))
+    check((e --> index(false)) == -1)
+    check((e --> index(true)) == -1)    
     check((e --> map(it * 2)) == res)
     check((e --> filter(it > 0) --> map(it * 2)) == res)
 
+  test "empty with changed type":
+    let e: seq[int] = @[]
+    let res2: seq[string] = @[]
+    check((e --> map($it) --> all(it == "123")) == true)
+    check((e --> map($it) --> exists(it == "0")) == false)
+    check((e --> map($it) --> find(it == "")) == none(string))
+    check((e --> map($it) --> index(it != "123")) == -1)
+    check((e --> map($it)) == res2)
+    check((e --> map($it) --> filter(it.len > 0) --> map(it & it)) == res2)
+ 
   test "flatten":
     let f = @[@[1, 2, 3], @[4, 5], @[6]]
     check(f --> flatten() == @[1, 2, 3, 4, 5, 6])
@@ -1012,9 +1042,10 @@ suite "valid chains":
     # uniqueness is only determined consecutively
     check(@[1, 1, 2, 1, 1, 3, 1] --> uniq() == @[1, 2, 1, 3, 1])
 
-  # test "uniq after changed type":
-  #   check(@[1, 2, 2, 2, 2, 3, 4, 4, 4, 5] --> map($it) --> uniq() == @["1", "2", "3", "4", "5"])
-  #   check(@[1, 1, 2, 1, 1, 3, 1] --> map($it) --> uniq() == @["1", "2", "3", "4", "5"])
+  test "uniq after changed type":
+    check(@[1, 2, 2, 2, 2, 3, 4, 4, 4, 5] --> map($it) --> uniq() == @["1", "2", "3", "4", "5"])
+    # uniqueness is only determined consecutively
+    check(@[1, 1, 2, 1, 1, 3, 1] --> map($it) --> uniq() == @["1", "2", "1", "3", "1"])
 
   test "inner exists":
     let x = @[1, 2, 3]
@@ -1049,11 +1080,11 @@ suite "valid chains":
     check(p.yes == @[2, 4, 6])
     check(p.no == @[1, 3, 5])
 
-  # test "partition after changed type":
-  #   let a = @[111, 2, 33, 4, 5555, 6]
-  #   let p = a --> map($it) --> partition(it.len() == 1)
-  #   check(p.yes == @["2", "4", "6"])
-  #   check(p.no == @["111", "33", "5555"])
+  test "partition after changed type":
+    let a = @[111, 2, 33, 4, 5555, 6]
+    let p = a --> map($it) --> partition(it.len() == 1)
+    check(p.yes == @["2", "4", "6"])
+    check(p.no == @["111", "33", "5555"])
 
   test "grouping":
     proc isEven(i: int): bool = (i and 1) == 0
@@ -1067,16 +1098,16 @@ suite "valid chains":
     check(m['e'] == @[(1, "one"), (3, "three")])
     check(m['o'] == @[(2, "two")])
 
-  # test "grouping after changed type":
-    # proc isEven(i: string): bool = (i.len() and 1) == 0
-    # let a = @[11, 2, 33, 4, 5555, 6]
-    # let p = a --> map($it) --> group(it.isEven())
-    # check(p[true] == @["2", "4", "6"])
-    # check(p[false] == @["11", "33", "5555"])
+  test "grouping after changed type":
+    proc isEvenLen(i: string): bool = (i.len() and 1) == 0
+    let a = @[11, 2, 33, 4, 5555, 6]
+    let p = a --> map($it) --> group(it.isEvenLen())
+    check(p[false] == @["2", "4", "6"])
+    check(p[true] == @["11", "33", "5555"])
 
     # group by last character
-    # proc stringyifyFirst(t: (int, string)): (string, string) = ($t[0], t[1])
-    # let m = @[(1, "one"), (2, "two"), (3, "three")] --> map(stringyifyFirst) --> group(it[1][^1])
-    # check(m['e'] == @[(1, "one"), (3, "three")])
-    # check(m['o'] == @[(2, "two")])
+    proc stringyifyFirst(t: (int, string)): (string, string) = ($t[0], t[1])
+    let m = @[(1, "one"), (2, "two"), (3, "three")] --> map(stringyifyFirst) --> group(it[1][^1])
+    check(m['e'] == @[("1", "one"), ("3", "three")])
+    check(m['o'] == @[("2", "two")])
 
