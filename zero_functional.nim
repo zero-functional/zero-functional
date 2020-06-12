@@ -1137,10 +1137,12 @@ proc zfFirstItem*(iter: Iterable): auto =
 ## All elements are processed that are not the same element as their preceeding element (or the first element).
 zfInline uniq():
   init:
-    var prev = none(type(it))
+    var prev: type(it)
+    var initialized = false
   loop:
-    if prev.isNone() or prev.get() != it:
-      prev = some(it)
+    if not initialized or prev != it:
+      initialized = true
+      prev = it
       yield it
 
 ## Implementation of `partition` command.
@@ -2155,8 +2157,7 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
           when not defined(js): # closure not supported by JS backend
             isClosure = true
           else:
-            static:
-              warning("Closure not supported by JS backend - argument true of `to` will be ignored.")
+            warning("Closure not supported by JS backend - argument true of `createIter` will be ignored.")
         elif closureVal.label != "false":
           zfFail("Unsupported parameter value '$1' to 'createIter'" % [
               closureVal.label])
