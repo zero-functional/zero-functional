@@ -225,11 +225,17 @@ proc findNode*(node: NimNode, kind: NimNodeKind,
     result = (node.kind == kind and (content.len == 0 or content == $node))
   result = node.findNode(hasNodeWithKind)
 
+proc findIdent*(node: NimNode, label: string): NimNode =
+  result = node.findNode(nnkIdent, label)
+
+proc hasIt*(node: NimNode): bool =
+  result = node.findIdent(zfIteratorVariableName) != nil
+
 proc findDefinition*(node: NimNode, label: string,
     kind = nnkLetSection): NimNode =
   ## Find the definition of a constant or variable
   proc hasDefinition(node: NimNode): bool =
-    result = (node.kind == kind and node.findNode(nnkIdent, label) != nil)
+    result = (node.kind == kind and node.findIdent(label) != nil)
   result = node.findNode(hasDefinition)
 
 ## Replace a given node by another in a specific parent
@@ -685,9 +691,9 @@ proc revertIt(ext: ExtNimNode) =
 
 ## Replace an inner `init` section and move it down to its for loop.
 proc checkInnerIt(ext: ExtNimNode) =
-  let itX = mkItNode(ext.itIndex-1)
-  let it = newIdentNode(zfIteratorVariableName)
-  if ext.initials.findNode(nnkIdent, it.label) != nil:
+  if ext.initials.hasIt():
+    let itX = mkItNode(ext.itIndex-1)
+    let it = newIdentNode(zfIteratorVariableName)
     ext.initials.replace(it, itX, all = true)
 
 ## Replace variable definitions with quoted variables, return let section for ident definitions
@@ -872,7 +878,7 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
                       `funNameExport`])
               newIntLitNode(0)
 
-    let hasResult = body.findNode(nnkIdent, "result") != nil
+    let hasResult = body.findIdent("result") != nil
     if hasResult:
       idents(res("resultIdent"))
       letSection.add quote do:
@@ -888,7 +894,7 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
       zfAddSequenceHandlers(funNameExport)
 
     # check if idx is used but not defined in the body section
-    if (body.findNode(nnkIdent, zfIndexVariableName) != nil and
+    if (body.hasIt() and
         body.findDefinition(zfIndexVariableName) == nil):
       idents(idxIdent)
       letSection.add quote do:
@@ -1102,8 +1108,8 @@ proc inlineMap*(ext: ExtNimNode) {.compileTime.} =
       loop:
         let it = it
         let it = f
-        
-  elif ext.node.findNode(nnkIdent, zfIteratorVariableName) == nil:
+
+  elif not ext.node.hasIt():
     # map was probably just called with the function name: auto add it
     zfInlineCall map(f):
       loop:
@@ -1316,8 +1322,7 @@ proc findParentWithChildLabeled(node: NimNode, label: string): NimNode =
 ## Changing the list in-place is also supported.
 proc inlineForeach*(ext: ExtNimNode) {.compileTime.} =
   let isEq = ext.node[1].kind == nnkExprEqExpr
-  let hasIterator = isEq and (ext.node[1][0].findNode(nnkIdent,
-      zfIteratorVariableName) != nil)
+  let hasIterator = isEq and ext.node[1][0].hasIt()
   var adaptedExpression = ext.adapt()
 
   # special case: assignment to iterator -> try to assign to outer list (if possible)
@@ -2195,7 +2200,7 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
   if ((not isIter and (isSeq and (resultType.id.len > 0 and
       resultType.id.startsWith("array") or (resultType.id.len == 0 and
           td.startsWith("array"))))) or
-      args.findNode(nnkIdent, zfIndexVariableName) != nil):
+      args.hasIt()):
     needsIndexVar = true
 
   let init = nnkStmtList.newTree()
