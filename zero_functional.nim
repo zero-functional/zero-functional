@@ -1088,30 +1088,34 @@ proc inlineMap*(ext: ExtNimNode) {.compileTime.} =
     else:
       # just the "normal" definition (a = b)
       ext.node.add(newIdentDefs(v[0], newEmptyNode(), v[1]))
+    
     if not isInternal: # leave out definitions that access it or idx directly
       # set next iterator
       let f = v[0] # set 'it' to the previously assigned value / 'it' might also be consequently used
       ext.node = nnkStmtList.newTree(ext.node).add quote do:
         let it = `f`
         discard(it) # iterator might not be used
+  
   # check for recursive arrow in the map: if used assign another iterator - prevents capturing error of outer iterator
   elif kind == nnkInfix and (ext.node[1][0].label == zfArrow or ext.node[1][0].label == zfArrowDbg):
     zfInlineCall map(f):
       loop:
         let it = it
         let it = f
-  elif ext.node.findNode(nnkIdent, zfIteratorVariableName) != nil:
-    zfInlineCall map(f):
-      loop:
-        let it = f
-  else:
+        
+  elif ext.node.findNode(nnkIdent, zfIteratorVariableName) == nil:
+    # map was probably just called with the function name: auto add it
     zfInlineCall map(f):
       loop:
         let it =
           when compiles(f(it)):
             f(it)
           else:
-            f
+            f 
+  else:
+    zfInlineCall map(f):
+      loop:
+        let it = f
 
 zfInline indexedMap(f):
   loop:
@@ -2574,14 +2578,14 @@ macro arrowCall(a: untyped, b: untyped, dbg: untyped): untyped =
 ## general macro to invoke all available zero_functional functions
 macro `-->`*(a: untyped, b: untyped): untyped =
   let (a, b2, debug) = checkArrow(a, b)
-  let dbg = b2.dbgLineInfo(debug or debugAll)
+  let dbg = b.dbgLineInfo(debug or debugAll)
   result = quote:
     arrowCall(`a`, `b2`, `dbg`)
 
 ## use this macro for debugging - will output the created code
 macro `-->>`*(a: untyped, b: untyped): untyped =
   let (a, b2, _) = checkArrow(a, b)
-  let dbg = b2.dbgLineInfo(true)
+  let dbg = b.dbgLineInfo(true)
   result = quote:
     arrowCall(`a`, `b2`, `dbg`)
 
