@@ -349,7 +349,7 @@ sequence --> otherOperations(..) --> index(cond): int
 
 ### indexedMap
 
-Adds or prepends the index of each element in the collection to the element itself and generates a named tuple `(idx: index, elem: it)` for each element in the collection. This is similar to [`enumerate`](https://docs.python.org/3/library/functions.html#enumerate) in python.
+Adds or prepends the index of each element in the collection to the element itself and generates a named tuple `(idx: index, elem: it)` for each element in the collection. 
 
 ```nim
 var n = zip(a, b, c) -->
@@ -359,6 +359,13 @@ var n = zip(a, b, c) -->
             all(it > 4)
 ```
 
+### enumerate 
+
+Is similar to `indexedMap` and to [`enumerate`](https://docs.python.org/3/library/functions.html#enumerate) in python. It does not take any parameters and just works on the current collection adding the index of the current element.
+
+```nim
+@[8, 11, 12] --> enumerate() == @[(0,8), (1,11), (2,12)] 
+```
 
 ### fold
 
