@@ -214,16 +214,22 @@ proc findNodeParents(node: NimNode, kind: NimNodeKind,
 ## check if the discriminator function is valid for the node or one of its children (depth-first).
 proc findNode(node: NimNode, discriminator: proc (n: NimNode): bool): NimNode =
   result = nil
-  let res = node.findNodeParents(discriminator)
-  if res.len > 0:
-    result = res[0]
+  if discriminator(node):
+    return node
+  for child in node:
+    let res = child.findNode(discriminator)
+    if res != nil:
+      return res
 
-proc findNode*(node: NimNode, kind: NimNodeKind,
-    content: string = ""): NimNode =
+proc findNode*(node: NimNode, kind: NimNodeKind, content: string = ""): NimNode =
   ## Find a node given its kind and - optionally - its content.
-  proc hasNodeWithKind(node: NimNode): bool =
-    result = (node.kind == kind and (content.len == 0 or content == $node))
-  result = node.findNode(hasNodeWithKind)
+  result = nil
+  if node.kind == kind and (content == "" or content == node.label):
+    return node
+  for child in node:
+    let res = child.findNode(kind, content)
+    if res != nil:
+      return res
 
 proc findIdent*(node: NimNode, label: string): NimNode =
   result = node.findNode(nnkIdent, label)
@@ -280,7 +286,7 @@ macro idents(args: varargs[untyped]): untyped =
   ### idents(ext) <=> let ext = newIdentNode("ext")
   ### exception for result:
   ### idents(result) <=> let resultIdent = newIdentNode("result")
-  result = nnkStmtList.newTree()
+  result = newStmtList()
   for a in args:
     var arg = a
     var s = repr(a)
@@ -296,8 +302,6 @@ macro idents(args: varargs[untyped]): untyped =
       else:
         # remove the quotes
         s = s[1..^2]
-    if $arg == "result":
-      arg = newIdentNode("resultIdent")
     result.add quote do:
       let `arg` = newIdentNode(`s`)
 
@@ -305,10 +309,10 @@ macro idents(args: varargs[untyped]): untyped =
 proc createExtensionProc(name: string, cmdSeq: seq[string]): (NimNode, NimNode) =
   let procName = newIdentNode("zfExtend" & name)
   let cseq = if cmdSeq.len > 0: cmdSeq else: zfFunctionNames
-  idents(ext, result)
+  idents(ext)
   let procDef = quote:
     proc `procName`(`ext`: ExtNimNode): ExtNimNode {.compileTime.} =
-      `resultIdent` = `ext`
+      result = `ext`
       case `ext`.label
   let caseStmt = procDef.findNode(nnkCaseStmt)
   for cmd in cseq:
@@ -482,9 +486,9 @@ proc zfAddItemConvert*[T, U](a: var Iterable[T], idx: int, item: U) =
     else: assert(false)
 ]#
 macro genZfAddItemTuple(maxTupleSize: static[int]): untyped =
-  result = nnkStmtList.newTree()
+  result = newStmtList()
   idents(T, a, idx(zfIndexVariableName), item)
-  let t = nnkPar.newTree(T)
+  let t = newPar(T)
   let cases = quote:
     case `idx`:
       of 0: `a`[0] = `item`
@@ -525,17 +529,11 @@ proc res*(ext: ExtNimNode): NimNode {.compileTime.} =
 proc adapt(node: NimNode, iteratorIndex: int, inFold: bool = false): NimNode {.compileTime.} =
   result = node
 
-  case node.kind:
-
-  of nnkIdent:
+  if node.kind == nnkIdent:
     if $node == zfIteratorVariableName:
       result = mkItNode(iteratorIndex)
     elif inFold and useInternalAccu and $node == zfAccuVariableName:
       result = newIdentNode(internalAccuName)
-
-  of nnkFloatLit..nnkFloat128Lit, nnkCharLit..nnkUInt64Lit,
-      nnkStrLit..nnkTripleStrLit, nnkSym:
-    discard
 
   else:
     # adapt the child nodes
@@ -699,7 +697,7 @@ proc checkInnerIt(ext: ExtNimNode) =
 ## Replace variable definitions with quoted variables, return let section for ident definitions
 proc replaceVarDefs(a: NimNode, quotedVars: var OrderedTable[string, string],
     preSection = false): NimNode =
-  result = nnkStmtList.newTree()
+  result = newStmtList()
   let isPre = preSection or (a.kind == nnkCall and a[0].label == "pre")
   for b in a:
     if (a.kind == nnkVarSection or a.kind == nnkLetSection) and b.kind == nnkIdentDefs:
@@ -757,7 +755,7 @@ proc zfDelegate*(ext: ExtNimNode, caller: NimNode, delegateIndex: int) =
       newNode.add(caller[i])
   ext.delegateUntil = ext.nodeIndex + delegateIndex + 1
   ext.args.insert(ext.delegateUntil, newNode)
-  ext.node = nnkStmtList.newTree()
+  ext.node = newStmtList()
 
 macro zfParamChk(funNameExport: untyped, sym: untyped, symName: untyped,
     paramType: typedesc): untyped =
@@ -812,10 +810,10 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
 
     let procName = newIdentNode("inline" & funName.capitalizeAscii())
     # parameters given to the zero function
-    let paramSection = nnkStmtList.newTree()
+    let paramSection = newStmtList()
     # referenced variables are added here
     # this contains common definitions for all sections
-    let letSection = nnkStmtList.newTree()
+    let letSection = newStmtList()
     # reference to the 'ext' parameter of the created proc
     idents(ext)
     var quotedVars = initOrderedTable[string, string]()
@@ -826,7 +824,7 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
     let firstSym = if funDef.len > 1: funDef[1].label else: ""
     let chk =
       if firstSym == "_":
-        nnkStmtList.newTree()
+        newStmtList()
       else:
         quote:
           if `numArgs` < `ext`.node.len-1:
@@ -1004,7 +1002,7 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
         let sym = nnkAccQuoted.newTree(newIdentNode(symName))
         code.add quote do:
           if `nodeIdx` == 0: # first check: wrap the original loop code and add the below check statements
-            `ext`.node = nnkStmtList.newTree(`ext`.node)
+            `ext`.node = newStmtList(`ext`.node)
           if `ext`.nodeIndex > `delegateUntil`:
             let paramCheck = quote:
               zfParamChk(`funNameExport`, `sym`, `symName`, `paramType`)
@@ -1023,7 +1021,7 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
 
 # alternative syntax still possible
 macro zero*(a: untyped): untyped =
-  let body = nnkStmtList.newTree()
+  let body = newStmtList()
   for i in 1..<a.len:
     body.add(a[i])
   result = zeroParse(a[0], body)
@@ -1098,7 +1096,7 @@ proc inlineMap*(ext: ExtNimNode) {.compileTime.} =
     if not isInternal: # leave out definitions that access it or idx directly
       # set next iterator
       let f = v[0] # set 'it' to the previously assigned value / 'it' might also be consequently used
-      ext.node = nnkStmtList.newTree(ext.node).add quote do:
+      ext.node = newStmtList(ext.node).add quote do:
         let it = `f`
         discard(it) # iterator might not be used
   
@@ -1357,7 +1355,7 @@ proc inlineForeach*(ext: ExtNimNode) {.compileTime.} =
           `leftSide` = `rightSide`
   elif isEq:
     adaptedExpression = nnkAsgn.newTree(adaptedExpression[0], adaptedExpression[1])
-  ext.node = nnkStmtList.newTree().add quote do:
+  ext.node = newStmtList().add quote do:
     `adaptedExpression`
   
 ## Implementation of the 'index' command.
@@ -1453,7 +1451,7 @@ proc combineWithOtherCollection(ext: ExtNimNode, indexed: bool) {.compileTime.} 
   var itIdent = ext.prevItNode()
   let iterators = nnkBracket.newTree(itIdent)
   let indices = nnkBracket.newTree(idxIdent)
-  var code = nnkStmtList.newTree()
+  var code = newStmtList()
   var root = code
 
   var idx = 1
@@ -1561,14 +1559,14 @@ macro genTupleSeqCalls(maxTupleSize: static[int]): untyped =
   for l in 1..maxTupleSize:
     types.add(newIdentNode("T" & $l))
 
-  result = nnkStmtList.newTree()
+  result = newStmtList()
   for tupleNum in 2..maxTupleSize:
     let genIdents = nnkIdentDefs.newTree()
-    let paramIdents = nnkPar.newTree()
+    let paramIdents = newPar()
     let params = nnkFormalParams.newTree()
     let params2 = nnkFormalParams.newTree()
-    let retVal = nnkPar.newTree()
-    let calls = nnkPar.newTree()
+    let retVal = newPar()
+    let calls = newPar()
     for i in 0..tupleNum-1:
       # Generic param is [T1, T2, ...]
       genIdents.add(types[i])
@@ -1586,12 +1584,12 @@ macro genTupleSeqCalls(maxTupleSize: static[int]): untyped =
     genIdents.add(newEmptyNode()).add(newEmptyNode())
 
     # generate initTupleSeq
-    let body = nnkStmtList.newTree(nnkAsgn.newTree(newIdentNode("result"), calls))
+    let body = newStmtList(nnkAsgn.newTree(newIdentNode("result"), calls))
     result.add(nnkProcDef.newTree(newIdentNode("initTupleSeq"), newEmptyNode(),
       nnkGenericParams.newTree(genIdents), params, newEmptyNode(), newEmptyNode(), body))
 
     # generate addToTupleSeq
-    let body2 = nnkStmtList.newTree()
+    let body2 = newStmtList()
     idents(types, t)
     for i in 0..tupleNum-1:
       body2.add quote do:
@@ -1627,7 +1625,7 @@ proc inlineSeq(ext: ExtNimNode) {.compileTime.} =
 
   if ext.hasMinHigh:
     let minHigh = newIdentNode(zfMinHighVariableName)
-    var itDef = nnkStmtList.newTree()
+    var itDef = newStmtList()
     if ext.node.kind == nnkCall:
       let zipArgs = ext.adapt()
       itDef = quote:
@@ -1714,7 +1712,7 @@ proc inlineElement(ext: ExtNimNode) {.compileTime.} =
             zfFail("implementation for command '$1' was not replaced by the extension!" % label)
           elif res.label == "":
             # call was replaced by additional calls
-            ext.node = nnkStmtList.newTree()
+            ext.node = newStmtList()
           else:
             # call was internally replaced by another call: repeat inlining
             ext.inlineElement()
@@ -1796,7 +1794,7 @@ proc wrapIndexable(a: NimNode): NimNode {.compileTime.} =
 ## see `MkListIndexable`.
 proc replaceZip(args: NimNode): NimNode {.compileTime.} =
   var idx = 0
-  result = nnkStmtList.newTree()
+  result = newStmtList()
 
   # zip(a,b,c) <=> a --> zip(b,c) <~> a --> map(a[idx],b[idx],c[idx])
   let highList = nnkBracket.newTree()
@@ -1885,9 +1883,10 @@ proc getResType(resultType: ResultType, td: string): (NimNode, bool) {.compileTi
         `res`[int] # this is actually a dummy type
     result = (q, false)
 
-proc moveItToInnerLoops(ext: ExtNimNode, node: NimNode) =
-  let initials = node[1]
-  let loopSection = node[2]
+proc moveItToInnerLoops(ext: ExtNimNode, node: NimNode): NimNode =
+  result = node.copyNimTree()
+  let initials = result[1]
+  let loopSection = result[2]
 
   for i in 0..<ext.maxIndex:
     let it = mkItNode(i)
@@ -1899,7 +1898,7 @@ proc moveItToInnerLoops(ext: ExtNimNode, node: NimNode) =
             if l[0].kind == nnkForStmt or l[0].kind == nnkWhileStmt:
               l[0][2].insert(0, ins)
             else:
-              l.insert(1, initials.copyNimTree())
+              l.insert(1, ins)
             initials.del(0, initials.len)
             break
         break
@@ -1937,20 +1936,17 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool,
   if isSeq and not isIter and (resType != nil or forceSeq):
     if not explicitType and (collType.find("[") != -1 or forceSeq):
       hasIter = true
-  if hasIter:
-    let procName = newIdentNode(zfInternalHelperProc)
-    let fun = loopDef.copyNimTree()
-    ext.moveItToInnerLoops(fun)
-    ext.adaptItDefs(loopDef)
-    if ext.maxIndex > 1:
-      itFun = quote:
-        {.push hint[XDeclaredButNotUsed]: off.}
-        proc `procName`(): auto =
-          `fun`
-        {.pop.}
-    itDef = ext.iterResultType()
+      let procName = newIdentNode(zfInternalHelperProc)
+      let fun = ext.moveItToInnerLoops(loopDef)
+      ext.adaptItDefs(loopDef)
+      if ext.maxIndex > 1:
+        itFun = quote:
+          {.push hint[XDeclaredButNotUsed]: off.}
+          proc `procName`(): auto =
+            `fun`
+          {.pop.}
+      itDef = ext.iterResultType()
 
-  idents(result)
   var autoProc = quote:
     (proc(): auto =
       nil)
@@ -1961,7 +1957,7 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool,
   if resType != nil:
     code = quote:
       var res: `resType`
-      `resultIdent` = zfInit(res)
+      result = zfInit(res)
 
   # check explicitType: type was given explicitly (inclusive all template arguments) by user,
   # then we use resType directly:
@@ -1990,7 +1986,7 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool,
             `collSym`[type(`itDef`)]
       code = quote:
         var res: `resDef`
-        `resultIdent` = zfInit(res)
+        result = zfInit(res)
 
     elif isTuple:
       let num = collType.split(",").len()
@@ -1999,23 +1995,23 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool,
         zfFail("Tuple return types are only supported from 2 up to $1 elements" %
             [$zfMaxTupleSize])
       let x = genSym(nskVar, "x")
-      let init = nnkAsgn.newTree(`resultIdent`, nnkPar.newTree())
+      let tup = newPar()
       for _ in 1..num:
-        init[1].add(x)
+        tup.add(x)
       code = quote:
         var `x`: type(`itDef`)
-        `init`
+        result = `tup`
 
     elif forceSeq and hasIter:
       let coll = newIdentNode(defaultCollectionType)
       code = quote:
         var res: `coll`[type(`itDef`)]
-        `resultIdent` = zfInit(res)
+        result = zfInit(res)
 
     else:
       # use the same type as in the original list
-      code = nnkStmtList.newTree().add quote do:
-        `resultIdent` = zfInit(`listRef`)
+      code = newStmtList().add quote do:
+        result = zfInit(`listRef`)
 
   if isSeq:
     # unfortunatly it does not (yet) work in Nim to define iterators anywhere in Nim and get a result from it
@@ -2039,7 +2035,7 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool,
       # replace yield expression in proc with a result expression
       # the created proc is used later on only to determine the result type - not to actually call the proc
       let setResult = quote:
-        `resultIdent` = `res`
+        result = `res`
       # within parent replace yield with result = it
       path2[1].replace(path2[0], setResult)
 
@@ -2203,19 +2199,19 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
       args.hasIt()):
     needsIndexVar = true
 
-  let init = nnkStmtList.newTree()
-  let initials = nnkStmtList.newTree()
-  let varDef = nnkStmtList.newTree()
+  let init = newStmtList()
+  let initials = newStmtList()
+  let varDef = newStmtList()
   init.add(varDef)
   init.add(initials)
 
-  var codeStart = nnkStmtList.newTree()
+  var codeStart = newStmtList()
   var code = codeStart
 
   var index = 1
   let listRef = args[0]
-  let finals = nnkStmtList.newTree()
-  let endLoop = nnkStmtList.newTree()
+  let finals = newStmtList()
+  let endLoop = newStmtList()
 
   var argIdx = 1
   var ext: ExtNimNode
@@ -2264,7 +2260,7 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
       # the actual outer loop is created last - so insert the functions here
       newCode.add(codeStart)
       # and set the current outer loop as new codeStart
-      codeStart = nnkStmtList.newTree(ext.node)
+      codeStart = newStmtList(ext.node)
       index = oldIndex
     else:
       code.add(ext.node)
@@ -2298,12 +2294,10 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
     var theProc: NimNode = nil
     if isIter:
       if toIter: # used with to(iter)
-        idents(result)
-
         theProc = quote:
           (proc(): auto =
             `iterNode`
-            `resultIdent` = `iterName`)
+            result = `iterName`)
       else:
         theProc = iterNode # used with createIter(name)
     else:
@@ -2501,8 +2495,10 @@ proc checkArrow(a: NimNode, b: NimNode, debug: bool = false): (NimNode, NimNode,
     let opLeft = left.getOp()
     if opLeft == zfArrow or opLeft == zfArrowDbg:
       return checkArrow(left, shiftedExpr, opLeft == zfArrowDbg)
-    # it is inefficient to call `parseExpr` here - but using `shiftedExpr` directly does not work here
-    # the trees `shiftedExpr` and `parseExpr(shiftedExpr.repr)` are different
+    # it looks inefficient to call `parseExpr` with ` repr` here - but the tree needs to be re-arranged
+    # i.e. all dot-expressions containing other expressions on the right side need to be handled
+    # since `.` is stronger than other operators - and `.` replaced `-->` before.
+    # An explicit implementation is not faster than this one.
     return (left, parseExpr(shiftedExpr.repr), op == zfArrowDbg)
 
 ## Alternative call with comma separated arguments.
@@ -2512,7 +2508,7 @@ macro connect*(args: varargs[untyped]): untyped =
 
 macro zfunCall(td: typedesc, debug: static[bool], a: untyped,
     b: untyped): untyped =
-  let b2 = nnkStmtList.newTree(a)
+  let b2 = newStmtList(a)
   for c in b:
     if c.kind == nnkCall and c.len == 2 and c[1].kind == nnkStmtList:
       for callParam in c[1]:
