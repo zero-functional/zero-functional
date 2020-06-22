@@ -563,8 +563,7 @@ suite "valid chains":
     # indexedFlatten attaches the index of the element within the sub-list - that now has been flattened
     check(f --> indexedFlatten() == @[(0, 1), (1, 2), (2, 3), (0, 4), (1, 5), (0, 6)])
     # this is not the same as:
-    check(f --> flatten() --> map((idx, it)) == @[(0, 1), (1, 2), (2, 3), (3,
-        4), (4, 5), (5, 6)])
+    check(f --> flatten() --> map((idx, it)) == @[(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6)])
 
   test "flatten sum":
     check((@[a, b] --> flatten() --> fold(0, a + it)) == 9)
@@ -971,8 +970,8 @@ suite "valid chains":
 
   test "tuple conversion":
     let t = (1, 2, 3)
-    check(t --> map(float(it)) == (1.0, 2.0, 3.0))
-    let (x, y) = (1, 2) --> map(float(it))
+    check(t --> map(float) == (1.0, 2.0, 3.0))
+    let (x, y) = (1, 2) --> map(float)
     check(x == 1.0 and y == 2.0)
 
   test "assignment in map":
@@ -1110,4 +1109,5 @@ suite "valid chains":
     let m = @[(1, "one"), (2, "two"), (3, "three")] --> map(stringyifyFirst) --> group(it[1][^1])
     check(m['e'] == @[("1", "one"), ("3", "three")])
     check(m['o'] == @[("2", "two")])
+
 

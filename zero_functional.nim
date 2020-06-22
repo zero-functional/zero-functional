@@ -13,7 +13,7 @@ const zfAccuName* = "accu"
 
 const zfArrow = "-->"
 const zfArrowDbg = "-->>"
-const callSuffix = "Call"
+const callSuffix = "__call__"
 const internalIteratorName = "__" & zfIteratorVariableName
 const useInternalAccu = zfAccuVariableName != "result"
 const internalAccuName =
@@ -293,15 +293,15 @@ macro idents(args: varargs[untyped]): untyped =
     let idx = s.find("(")
     if idx != -1:
       arg = newIdentNode(s[0..idx-1])
-      s = s[idx+1..^2]
-      if s[^1] != '"':
+      s = s[idx+1..s.len-2]
+      if s[s.len-1] != '"':
         # refer to the given variable name (without the string quotes)
         result.add(nnkLetSection.newTree(newIdentDefs(arg, newEmptyNode(),
             newCall("newIdentNode", newIdentNode(s)))))
         continue
       else:
         # remove the quotes
-        s = s[1..^2]
+        s = s[1..s.len-2]
     result.add quote do:
       let `arg` = newIdentNode(`s`)
 
@@ -381,7 +381,7 @@ proc toEnum*[T: typedesc[enum]](key: string; t: T): auto =
 ## Converts the id-string to its ReduceCommand counterpart.
 proc toReduceCommand(key: string): Option[ReduceCommand] =
   if key.startsWith("indexed"):
-    return key[7..^1].toLowerAscii().toReduceCommand()
+    return key[7..key.len-1].toLowerAscii().toReduceCommand()
   result = key.toEnum(ReduceCommand)
 
 {.push inline.}
@@ -658,7 +658,7 @@ proc replaceIt(a: NimNode, replNext: NimNode, replPrev: NimNode): (bool, bool) =
       child.kind == nnkIdentDefs or child.kind == nnkAsgn
 
     if isAssignment:
-      res.right = child.replaceItSub(child[^1], replRight, false) or res.right
+      res.right = child.replaceItSub(child[child.len-1], replRight, false) or res.right
       res.left = child.replaceItSub(child[0], replLeft, true) or res.left
     else:
       if child.kind == nnkIdent and child.label == zfIteratorVariableName:
@@ -740,7 +740,7 @@ proc addDefinitions(node: NimNode, symDefs: var OrderedTable[string, NimNode],
       if isAssignment:
         # right side goes first! This also ensures the next iterator (on the left side)
         # to be created after the previous (on the right side)
-        child[^1].addDefinitions(symDefs, letSection)
+        child[child.len-1].addDefinitions(symDefs, letSection)
         child[0].addDefinitions(symDefs, letSection)
       else:
         child.addDefinitions(symDefs, letSection)
@@ -802,7 +802,7 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
     let isCall = funName.endsWith(callSuffix)
     # when this function has been called with zfInlineCall the callSuffix has to be stripped for the actual zero function name
     if isCall:
-      funNameExport = funName[0..^callSuffix.len+1]
+      funNameExport = funName[0..funName.len-callSuffix.len-1]
       if not (funNameExport in zfFunctionNames):
         addFunction(funNameExport) # only add it once
     else:
@@ -1870,13 +1870,13 @@ proc getResType(resultType: ResultType, td: string): (NimNode, bool) {.compileTi
     let idx2 = td.find("[")
     var q: NimNode
     if idx2 != -1:
-      var tdarg = td[idx2+1..^2]
+      var tdarg = td[idx2+1..td.len-2]
       let idxComma = tdarg.find(", ")
       let idxBracket = tdarg.find("[")
       if idxComma != -1 and (idxBracket == -1 or idxBracket > idxComma) and
           resType.id != "array":
         # e.g. array[0..2,...] -> seq[...]
-        tdarg = tdarg[idxComma+2..^1]
+        tdarg = tdarg[idxComma+2..tdarg.len-1]
       q = parseExpr(resType.id & "[" & tdarg & "]")
     else:
       q = quote:
@@ -2078,8 +2078,8 @@ proc checkTo(args: NimNode, td: string): ResultType {.compileTime.} =
     elif result.id == "set": # set as a shortcut for HashSet
       result.id = "HashSet"
       result.implicit = true
-    elif result.id.startsWith("set["):
-      result.id = "HashSet" & result.id[3..^1]
+    elif result.id.startswith("set["):
+      result.id = "HashSet" & result.id[3..result.id.len-1]
     elif result.id == "seq":
       result.id = "seq[int]"
       result.implicit = true
@@ -2094,9 +2094,9 @@ proc checkTo(args: NimNode, td: string): ResultType {.compileTime.} =
         # Check forced sequences or lists
         if isSeq or isList:
           if isSeq:
-            arg[0] = newIdentNode(label[0..^4])
+            arg[0] = newIdentNode(label[0..label.len-4])
           elif isList:
-            arg[0] = newIdentNode(label[0..^5])
+            arg[0] = newIdentNode(label[0..label.len-5])
           if isSeq or isList or result.id.len == 0:
             if isSeq:
               result.id = "seq"
