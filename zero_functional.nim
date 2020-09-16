@@ -1564,23 +1564,20 @@ macro genTupleSeqCalls(maxTupleSize: static[int]): untyped =
     let genIdents = nnkIdentDefs.newTree()
     let paramIdents = newPar()
     let params = nnkFormalParams.newTree()
-    let params2 = nnkFormalParams.newTree()
     let retVal = newPar()
     let calls = newPar()
     for i in 0..tupleNum-1:
       # Generic param is [T1, T2, ...]
-      genIdents.add(types[i])
+      genIdents.add(types[i].copyNimNode)
       # parameter is (T1, T2, ...)
-      paramIdents.add(types[i])
+      paramIdents.add(types[i].copyNimNode)
       # return value is (seq[T1], seq[T2], ...)
-      retVal.add(nnkBracketExpr.newTree(newIdentNode("seq"), types[i]))
+      retVal.add(nnkBracketExpr.newTree(newIdentNode("seq"), types[i].copyNimNode))
       # result = (newSeq[T1](), newSeq[T2](), ...)
-      calls.add(newCall(nnkBracketExpr.newTree(newIdentNode("newSeq"), types[i])))
+      calls.add(newCall(nnkBracketExpr.newTree(newIdentNode("newSeq"), types[i].copyNimNode)))
     let tParam = newIdentDefs(newIdentNode("t"), paramIdents, newEmptyNode())
-    let tsParam = newIdentDefs(newIdentNode("types"), nnkVarTy.newTree(retVal),
-        newEmptyNode())
     params.add(retVal).add(tParam)
-    params2.add(newEmptyNode()).add(tsParam).add(tParam)
+    
     genIdents.add(newEmptyNode()).add(newEmptyNode())
 
     # generate initTupleSeq
@@ -1590,12 +1587,16 @@ macro genTupleSeqCalls(maxTupleSize: static[int]): untyped =
 
     # generate addToTupleSeq
     let body2 = newStmtList()
+    let tsParam = newIdentDefs(newIdentNode("types"), nnkVarTy.newTree(retVal.copyNimTree),
+        newEmptyNode())
+    let params2 = nnkFormalParams.newTree()
+    params2.add(newEmptyNode()).add(tsParam).add(tParam.copyNimTree)
     idents(types, t)
     for i in 0..tupleNum-1:
       body2.add quote do:
         `types`[`i`].add(`t`[`i`])
     result.add(nnkProcDef.newTree(newIdentNode("addToTupleSeq"), newEmptyNode(),
-      nnkGenericParams.newTree(genIdents), params2, newEmptyNode(),
+      nnkGenericParams.newTree(genIdents.copyNimTree), params2, newEmptyNode(),
           newEmptyNode(), body2))
 genTupleSeqCalls(zfMaxTupleSize)
 
