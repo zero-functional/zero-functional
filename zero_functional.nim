@@ -1564,7 +1564,6 @@ macro genTupleSeqCalls(maxTupleSize: static[int]): untyped =
     let genIdents = nnkIdentDefs.newTree()
     let paramIdents = newPar()
     let params = nnkFormalParams.newTree()
-    
     let retVal = newPar()
     let calls = newPar()
     for i in 0..tupleNum-1:
