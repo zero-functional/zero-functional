@@ -1970,7 +1970,7 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool,
     # hence we try to apply the map-operation to the iterator, etc. to get the resulting iterator (and list) type.
     var listRef = args[0]
     if listRef.kind == nnkCall and listRef[0].label == $Command.zip:
-      listRef = listRef.findNode(nnkPar)[0][0]
+      listRef = listRef.findNode(nnkPar)[0][0] or listRef.findNode(nnkTupleConstr)[0][0]
 
     let i = collType.find("[")
     let isTuple = collType.startsWith("(") and collType.endsWith(")")
