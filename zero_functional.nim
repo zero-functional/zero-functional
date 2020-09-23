@@ -1079,7 +1079,7 @@ proc inlineMap*(ext: ExtNimNode) {.compileTime.} =
     let isInternal = label == internalIteratorName or label == zfIndexVariableName
     let v = ext.adapt()
     ext.node = nnkLetSection.newTree()
-    if v[0].kind == nnkPar:
+    if v[0].kind in {nnkPar, nnkTupleConstr}:
       # allow tuple unpacking: ((a,b) = c)
       # - but the unpacking is done manually to also allow assigning arrays or sequences
       for idx, varName in v[0]:
@@ -1970,7 +1970,7 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool,
     # hence we try to apply the map-operation to the iterator, etc. to get the resulting iterator (and list) type.
     var listRef = args[0]
     if listRef.kind == nnkCall and listRef[0].label == $Command.zip:
-      listRef = listRef.findNode(nnkPar)[0][0]
+      listRef = listRef.findNode(nnkPar)[0][0] or listRef.findNode(nnkTupleConstr)[0][0]
 
     let i = collType.find("[")
     let isTuple = collType.startsWith("(") and collType.endsWith(")")
@@ -2115,7 +2115,7 @@ proc checkTo(args: NimNode, td: string): ResultType {.compileTime.} =
 
 proc replaceSimpleMap(args: NimNode) {.compileTime.} =
   for i in 0..args.len-1:
-    if args[i].kind == nnkPar:
+    if args[i].kind in {nnkPar, nnkTupleConstr}:
       var allIds = true
       # special case: (id) or (id1,id2) - this is a shortcut for
       # map(id = it) or map((id1,id2) = it)
@@ -2434,7 +2434,7 @@ proc delegateMacro(a: NimNode, b1: NimNode, td: string,
   var node = b
   while node.kind == nnkCall:
     if node[0].kind == nnkDotExpr:
-      if node[0][0].kind == nnkPar:
+      if node[0][0].kind in {nnkPar, nnkTupleConstr}:
         node[0].replaceSimpleMap()
       else:
         # could have something like foo.bar --> ...
