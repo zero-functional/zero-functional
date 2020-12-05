@@ -25,7 +25,6 @@ Table of Contents
   * [all](#all)
   * [index](#index)
   * [indexedMap](#indexedmap)
-  * [enumerate](#enumerate)
   * [fold](#fold)
   * [reduce](#reduce)
     + [max](#max)
@@ -362,7 +361,9 @@ var n = zip(a, b, c) -->
             all(it > 4)
 ```
 
-### enumerate 
+### enumerate (deprecated)
+
+Note: enumerate has been deprecated since it is defined in the nim standard library now and this will interfere with zero-functional.
 
 Is similar to `indexedMap` and to [`enumerate`](https://docs.python.org/3/library/functions.html#enumerate) in python. It does not take any parameters and just works on the current collection adding the index of the current element.
 
