@@ -605,6 +605,8 @@ Some good examples from basic to more complicated can be found in [test.nim: reg
 ### Extending with plain nim
 When adding your own `foo` implementation you can write your own `inlineFoo` proc and register it with zero_functional. It should look like this:
 ```nim
+import macros # do not forget to import macros when extending zero_functional 
+
 proc inlineFoo*(ext: ExtNimNode) {.compileTime.} =
   # do some parameter checks
   if ext.node.len > SOME_MAX:
@@ -615,6 +617,11 @@ proc inlineFoo*(ext: ExtNimNode) {.compileTime.} =
   # the actual 'loop' section code
   ext.node = quote:
     # do something
+
+# ....
+# at the end register above extensions during compile time to use them with zero_functional
+static:
+  zfCreateExtension()
 ```
 
 The vanilla `inline`-proc implementations should follow certain rules. 
@@ -635,15 +642,23 @@ The vanilla `inline`-proc implementations should follow certain rules.
 - finally call `zfCreateExtension` after all `zfInline...` definitions and `zfAddFunction` calls - before using the actual function implementation
 
 ### Writing extensions with Zero-DSL
-Example - implement the (simple) map function:
+Example - implement filterNot function:
 ```nim
-zfInline map(f):
+import macros # do not forget to import macros when extending zero_functional
+
+zfInline filterNot(condition: bool):
   loop:
-    let it = f # create the next iterator in the loop setting it to the given parameter of the map function
+    if not condition:
+      yield it   
+
+# ....
+# at the end register above extensions during compile time to use them with zero_functional
+static:
+  zfCreateExtension()
 ```
 
 `zfInline` is the actual macro that takes the created function name (here: `map`) and its parameters and a body with different sections as input.
-`zfInline_dbg` will print the generated code `proc inlineMap` (see below).
+`zfInline_dbg` will print the generated code `proc inlineFilterMap` (see example for map below).
 
 The sections directly map to their counterparts in `ExtNimNode`:
 - `pre` prepare section: initialize variables and constants. It is possible to do the entire implementation in the `pre` section.
@@ -653,6 +668,13 @@ The sections directly map to their counterparts in `ExtNimNode`:
 - `delegate` delegate to other functions (like map, filter, etc.)
 - `endLoop` added to end of the loop
 - `final` after the loop section - e.g. to set the result
+
+Let's dissect the (simple) map implementation:
+``` nim
+zfInline map(f):
+  loop:
+    let it = f # create the next iterator in the loop setting it to the given parameter of the map function
+```
 
 The above `map` definition will be translated to:
 ```nim
