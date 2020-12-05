@@ -1,5 +1,5 @@
 language: node_js
-  - node_js: lts/*
+  - node_js: 12
 language: c
 compiler:
   - gcc
@@ -16,5 +16,5 @@ before_install:
 script:
 - nim --version
 - nim c --run test.nim
-- nim js --run test.nim
+- nim js -d:nodejs --run test.nim
 
