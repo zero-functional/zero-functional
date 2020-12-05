@@ -620,9 +620,11 @@ proc inlineFoo*(ext: ExtNimNode) {.compileTime.} =
     # do something
 
 # ....
-# at the end register above extensions during compile time to use them with zero_functional
+# after the function declarations register the extensions during compile time for use with zero_functional
 static:
   zfCreateExtension()
+  
+# use foo after the registration
 ```
 
 The vanilla `inline`-proc implementations should follow certain rules. 
@@ -653,9 +655,11 @@ zfInline filterNot(condition: bool):
       yield it   
 
 # ....
-# at the end register above extensions during compile time to use them with zero_functional
+# after the function declarations register the extensions during compile time for use with zero_functional
 static:
   zfCreateExtension()
+  
+# use foo after the registration
 ```
 
 `zfInline` is the actual macro that takes the created function name (here: `map`) and its parameters and a body with different sections as input.
