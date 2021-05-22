@@ -122,7 +122,7 @@ type
       it is T
 
   Iterable*[T] = concept a
-    for it in a:
+    for it in items(a):
       it is T
 
   Appendable*[T] = concept a, var b
