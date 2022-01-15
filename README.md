@@ -417,7 +417,7 @@ For `sum` and `product` this is not actually helpful but it can be used to find 
 
 ```nim
 check(@[11,2,0,-2,1,3,-1] --> indexedMin() == (3,-2))
-check(@[11,2,0,-2,1,3,-1] --> indexedMax() == (11,0))
+check(@[11,2,0,-2,1,3,-1] --> indexedMax() == (0,11))
 ```
 
 Note that a named tuple is created and the index is also accessible via `.idx` and the actual element with `.elem`.
