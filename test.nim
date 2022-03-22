@@ -112,7 +112,7 @@ zfInline average():
 zfInline intersect(_):
 # get all elements that are contained in all collections given as parameters
 # this function is built similar to the test case below:
-#   combinations(b,squaresPlusOne()).  
+#   combinations(b,squaresPlusOne()).
   pre:
     # first build the it[0] == it[1] and ... chain
     var chain = quote: true
@@ -295,7 +295,7 @@ suite "valid chains":
     check(not (a --> all(it > 0)))
 
   test "all with changed type":
-    check(a --> map(`$`) --> all(it.len > 0)) 
+    check(a --> map(`$`) --> all(it.len > 0))
 
   test "index":
     check((a --> index(it > 4)) == 1)
@@ -328,7 +328,7 @@ suite "valid chains":
 
   test "map with fold":
     check((a --> map(g(it)) --> fold(0, a + it)) == 10)
-    check((a --> map(`$`) --> fold("", a & it)) == "28-4")    
+    check((a --> map(`$`) --> fold("", a & it)) == "28-4")
 
   test "map with changed type":
     check((a --> mapSeq($it)) == @["2", "8", "-4"])
@@ -410,7 +410,7 @@ suite "valid chains":
     check((aArray --> indexedMap(it)) == @[(0, 2), (1, 8), (2, -4)])
     check((aArray --> indexedMap(it + 2) --> map(it.idx + it.elem)) ==
         @[4, 11, 0])
-        
+
   test "array enumerate":
     check((aArray --> enumerate()) == @[(0, 2), (1, 8), (2, -4)])
     check((aArray --> enumerate() --> map(it.idx + it.elem + 2)) ==
@@ -541,7 +541,7 @@ suite "valid chains":
     check((e --> find(false)) == none(int))
     check((e --> find(true)) == none(int))
     check((e --> index(false)) == -1)
-    check((e --> index(true)) == -1)    
+    check((e --> index(true)) == -1)
     check((e --> map(it * 2)) == res)
     check((e --> filter(it > 0) --> map(it * 2)) == res)
 
@@ -554,7 +554,7 @@ suite "valid chains":
     check((e --> map($it) --> index(it != "123")) == -1)
     check((e --> map($it)) == res2)
     check((e --> map($it) --> filter(it.len > 0) --> map(it & it)) == res2)
- 
+
   test "flatten":
     let f = @[@[1, 2, 3], @[4, 5], @[6]]
     check(f --> flatten() == @[1, 2, 3, 4, 5, 6])
@@ -669,7 +669,7 @@ suite "valid chains":
   test "SinglyLinkedList reversing elements":
     var l = a --> map(it) --> to(SinglyLinkedList)
     check(l --> map(it).to(seq) == @[-4, 8, 2])
-  
+
   test "map with operator access":
     proc gg(): seq[string] =
       @["1", "2", "3"]
@@ -882,7 +882,7 @@ suite "valid chains":
     let intersect =
       a() --> combinations(b, squaresPlusOne()). # combine all elements of a,b and squarePlusOne
         # get all combinations where the elements of each collection are equal
-        filter(it[0] == it[1] and it[0] == it[2]).  
+        filter(it[0] == it[1] and it[0] == it[2]).
         map(it[0]).  # and use the first element
         to(seq[int]) # output type with a() on left side has to be supplied
     check(intersect == @[5, 17])
@@ -1110,4 +1110,6 @@ suite "valid chains":
     check(m['e'] == @[("1", "one"), ("3", "three")])
     check(m['o'] == @[("2", "two")])
 
+  test "enumerate iteration":
+    check(0..10 --> filter(it mod 2 == 0).enumerate().map(it.idx) == @[0, 1, 2, 3, 4, 5])
 
