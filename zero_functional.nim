@@ -256,7 +256,7 @@ proc replace(node: NimNode, searchNode: NimNode, replNode: NimNode,
       elif all:
         child.replace(searchNode, replNode, all)
 
-proc getNilStmtParent(node: NimNode): (NimNode, int) = 
+proc getNilStmtParent(node: NimNode): (NimNode, int) =
   result = (nil, -1)
   var n = node
   for i in countdown(n.len-1, 0):
@@ -1092,14 +1092,14 @@ proc inlineMap*(ext: ExtNimNode) {.compileTime.} =
     else:
       # just the "normal" definition (a = b)
       ext.node.add(newIdentDefs(v[0], newEmptyNode(), v[1]))
-    
+
     if not isInternal: # leave out definitions that access it or idx directly
       # set next iterator
       let f = v[0] # set 'it' to the previously assigned value / 'it' might also be consequently used
       ext.node = newStmtList(ext.node).add quote do:
         let it = `f`
         discard(it) # iterator might not be used
-  
+
   # check for recursive arrow in the map: if used assign another iterator - prevents capturing error of outer iterator
   elif kind == nnkInfix and (ext.node[1][0].label == zfArrow or ext.node[1][0].label == zfArrowDbg):
     zfInlineCall map(f):
@@ -1115,7 +1115,7 @@ proc inlineMap*(ext: ExtNimNode) {.compileTime.} =
           when compiles(f(it)):
             f(it)
           else:
-            f 
+            f
   else:
     zfInlineCall map(f):
       loop:
@@ -1126,8 +1126,11 @@ zfInline indexedMap(f):
     let it = mkIndexedResult(idx, f)
 
 zfInline enumerate():
+  init:
+    var iterCounter = 0
   loop:
-    let it = mkIndexedResult(idx, it)
+    let it = (idx: iterCounter, elem: it)
+    iterCounter.inc()
 
 ## Implementation of the 'filter' command.
 ## The trailing commands execution depend on the filter condition to be true.
@@ -1357,7 +1360,7 @@ proc inlineForeach*(ext: ExtNimNode) {.compileTime.} =
     adaptedExpression = nnkAsgn.newTree(adaptedExpression[0], adaptedExpression[1])
   ext.node = newStmtList().add quote do:
     `adaptedExpression`
-  
+
 ## Implementation of the 'index' command.
 ## Returns the index of the element in the input list when the given expression was found or -1 if not found.
 zfInline index(cond: bool):
@@ -1423,7 +1426,7 @@ proc inlineReduce(ext: ExtNimNode) {.compileTime.} =
           initAccu = false
         else:
           let oldValue = result.elem
-          # assign the new iterator to the old value as accumulator 
+          # assign the new iterator to the old value as accumulator
           # before calling the operation `op`
           let it = mkAccuResult(oldValue, it)
           let newValue = op
@@ -1577,7 +1580,7 @@ macro genTupleSeqCalls(maxTupleSize: static[int]): untyped =
       calls.add(newCall(nnkBracketExpr.newTree(newIdentNode("newSeq"), types[i].copyNimNode)))
     let tParam = newIdentDefs(newIdentNode("t"), paramIdents, newEmptyNode())
     params.add(retVal).add(tParam)
-    
+
     genIdents.add(newEmptyNode()).add(newEmptyNode())
 
     # generate initTupleSeq

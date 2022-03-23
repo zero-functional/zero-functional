@@ -25,6 +25,7 @@ Table of Contents
   * [all](#all)
   * [index](#index)
   * [indexedMap](#indexedmap)
+  * [enumerate](#enumerate)
   * [fold](#fold)
   * [reduce](#reduce)
     + [max](#max)
@@ -361,14 +362,14 @@ var n = zip(a, b, c) -->
             all(it > 4)
 ```
 
-### enumerate (deprecated)
+### enumerate
 
-Note: enumerate has been deprecated since it is defined in the nim standard library now and this will interfere with zero-functional.
+Prepends the index to the value of the current iteration (unlike the `indexedMap`, which indexes the initial collection/iteration) and generates a named tuple `(idx: index, elem: it)` for each element in the iterable. Does not take any parameters.
 
-Is similar to `indexedMap` and to [`enumerate`](https://docs.python.org/3/library/functions.html#enumerate) in python. It does not take any parameters and just works on the current collection adding the index of the current element.
+Is similar to [`enumerate`](https://docs.python.org/3/library/functions.html#enumerate) in Python or [`enumerate`](https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.enumerate) in Rust.
 
 ```nim
-@[8, 11, 12] --> enumerate() == @[(0,8), (1,11), (2,12)] 
+0..10 --> filter(it mod 2 == 0).enumerate().map(it.idx) == @[0, 1, 2, 3, 4, 5]
 ```
 
 ### fold
