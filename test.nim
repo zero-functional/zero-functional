@@ -416,6 +416,10 @@ suite "valid chains":
     check((aArray --> enumerate() --> map(it.idx + it.elem + 2)) ==
         @[4, 11, 0])
 
+  test "enumerate vs indexedMap":
+    check((1..7 --> filter(it mod 2 == 0) --> enumerate()) == @[(0, 2), (1, 4), (2, 6)])
+    check((1..7 --> filter(it mod 2 == 0) --> indexedMap(it)) == @[(1, 2), (3, 4), (5, 6)])
+
   test "array fold":
     check((aArray --> fold(0, a + it)) == 6)
 
@@ -706,8 +710,9 @@ suite "valid chains":
     discard(e) # just check it can be assigned
     accept(d --> to(seq) == @[2, 4, 6])
 
+    # zip also needs the [] operator - reject macro doesn't work a 100% - it is SimpleIter instead of Error Type
     reject(zip(si, si2) --> map($it) != nil,
-        "need to provide an own implementation for mkIndexable(SimpleIter)") # zip also needs the [] operator
+        "need to provide an own implementation for mkIndexable(Error Type)") 
     reject(si --> combinations() --> all(it[0] < it[1]), "Only index with len types supported for combinations")
     accept(d --> combinations() --> all(it[0] < it[1]))
 
