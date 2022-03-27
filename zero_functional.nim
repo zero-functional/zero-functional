@@ -2470,40 +2470,33 @@ macro delegateArrow(td: typedesc, a: untyped, b: untyped,
   result = delegateMacro(a, b, getTypeInfo(td.getType[1], td.getTypeInst[1]),
       debugInfo.repr[1..^2])
 
-proc replArrow(n: NimNode, arrow: string): NimNode =
-  if n.kind == nnkInfix and n[0].label == arrow:
-    result = nnkDotExpr.newTree(n[1], n[2])
+proc hasDebugArrow(n: NimNode): bool = 
+  result = n.findIdent(zfArrowDbg) != nil
+
+proc isArrow(n: NimNode): bool =
+  result = n.kind == nnkInfix and (n[0].label == zfArrow or n[0].label == zfArrowDbg)
+
+proc replArrows(n: NimNode) : NimNode =
+  if n.isArrow():
+    result = nnkDotExpr.newTree(n[1].replArrows(), n[2].replArrows())
   else:
-    result = n
     if n.kind != nnkCall:
       for i in 0..n.len-1:
-        n[i] = n[i].replArrow(arrow)
-
-proc getOp(a: NimNode): string =
-  if a.kind == nnkInfix:
-    result = a[0].repr
-  else:
-    result = ""
+        n[i] = n[i].replArrows()
+    result = n
 
 proc checkArrow(a: NimNode, b: NimNode, debug: bool = false): (NimNode, NimNode, bool) =
-  result = (a, b, debug)
-  let op = a.getOp()
-  if op == zfArrow or op == zfArrowDbg:
-    # as is infix(-->, left_of_arrow, right_of_arrow)
-    # check recursively on left side
-    let (left, right) = (a[1], a[2])
-    # pack the right side to the other tree
-    # also replace the arrows with "."
-    let shiftedExpr = nnkDotExpr.newTree(right, b.replArrow(op))
-    # ensure to use the left-most arrow
-    let opLeft = left.getOp()
-    if opLeft == zfArrow or opLeft == zfArrowDbg:
-      return checkArrow(left, shiftedExpr, opLeft == zfArrowDbg)
-    # it looks inefficient to call `parseExpr` with ` repr` here - but the tree needs to be re-arranged
-    # i.e. all dot-expressions containing other expressions on the right side need to be handled
-    # since `.` is stronger than other operators - and `.` replaced `-->` before.
-    # An explicit implementation is not faster than this one.
-    return (left, parseExpr(shiftedExpr.repr), op == zfArrowDbg)
+  var left = a
+  var right = b
+
+  while left.isArrow():
+    # shift all the arrows to the right side
+    right = nnkInfix.newTree(left[0], left[2], right)
+    left = left[1]
+
+  # replace arrows by dots
+  return (left, parseExpr(right.replArrows().repr), debug or a.hasDebugArrow() or b.hasDebugArrow())
+
 
 ## Alternative call with comma separated arguments.
 macro connect*(args: varargs[untyped]): untyped =
