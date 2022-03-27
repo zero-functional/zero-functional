@@ -370,7 +370,11 @@ Is similar to [`enumerate`](https://docs.python.org/3/library/functions.html#enu
 
 ```nim
 0..10 --> filter(it mod 2 == 0).enumerate().map(it.idx) == @[0, 1, 2, 3, 4, 5]
+# enumerate vs indexedMap
+(1..7 --> filter(it mod 2 == 0) --> enumerate())    == @[(0, 2), (1, 4), (2, 6)])
+(1..7 --> filter(it mod 2 == 0) --> indexedMap(it)) == @[(1, 2), (3, 4), (5, 6)])
 ```
+
 
 ### fold
 

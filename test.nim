@@ -417,9 +417,8 @@ suite "valid chains":
         @[4, 11, 0])
 
   test "enumerate vs indexedMap":
-    let sampleArray = [1, 2, 3, 4, 5, 6, 7]
-    check((sampleArray --> filter(it mod 2 == 0) --> enumerate()) == @[(0, 2), (1, 4), (2, 6)])
-    check((sampleArray --> filter(it mod 2 == 0) --> indexedMap(it)) == @[(1, 2), (3, 4), (5, 6)])
+    check((1..7 --> filter(it mod 2 == 0) --> enumerate()) == @[(0, 2), (1, 4), (2, 6)])
+    check((1..7 --> filter(it mod 2 == 0) --> indexedMap(it)) == @[(1, 2), (3, 4), (5, 6)])
 
   test "array fold":
     check((aArray --> fold(0, a + it)) == 6)
