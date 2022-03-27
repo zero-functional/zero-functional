@@ -126,13 +126,11 @@ type
       it is T
 
   Appendable*[T] = concept a, var b
-    for it in a:
-      it is T
+    a is Iterable[T]
     b.append(T)
 
   Addable*[T] = concept a, var b
-    for it in a:
-      it is T
+    a is Iterable[T]
     b.add(T)
 
 ## Contains all functions that may result in a sequence result. Elements are added automatically to sequenceHandlers
