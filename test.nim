@@ -227,7 +227,7 @@ macro checkRejectMsg(e: untyped, msg: static[string], cmp: static[
     string]): untyped =
   result = quote:
     if `cmp` != `msg`:
-      let errMsg = "reject check failed:\n expected: '$1',\n      got: '$2'" % [`msg`, `cmp`]
+      const errMsg = "reject check failed:\n expected: '$1',\n      got: '$2'" % [`msg`, `cmp`]
       warning(errMsg)
     else:
       discard
@@ -688,33 +688,35 @@ suite "valid chains":
     check(@[1, 2, 3] --> map($it) --> to(list) is DoublyLinkedList[string])
 
   test "simple iterator":
-    # the type SimpleIter is restricted
-    # it does not define zfInit to initialize the type nor add (or append) to add elements
-    # also the `[]=` operator is missing
-    let si = initSimpleIter()
-    accept(si --> filter(it > 2) is seq[int])
-    accept(si --> filter(it > 2) --> to(seq) == @[3])
-    accept(si --> map($it) is seq[string]) # transformed to seq[string]
-    accept(si --> map(it) == @[1, 2, 3])
+    proc foo = # a workaround for ARC/ORC which only perform intraprocedural analysis.
+      # the type SimpleIter is restricted
+      # it does not define zfInit to initialize the type nor add (or append) to add elements
+      # also the `[]=` operator is missing
+      let si = initSimpleIter()
+      accept(si --> filter(it > 2) is seq[int])
+      accept(si --> filter(it > 2) --> to(seq) == @[3])
+      accept(si --> map($it) is seq[string]) # transformed to seq[string]
+      accept(si --> map(it) == @[1, 2, 3])
 
-    reject(si --> foreach(it = it * 2)) # foreach needs [] when changing elements
-    var sum = 0
-    si --> foreach(sum += it) # foreach without changing the content works however
-    check(si --> reduce(it.accu + it.elem) == sum)
-    accept(si --> fold(0, a + it) == 6)
+      reject(si --> foreach(it = it * 2)) # foreach needs [] when changing elements
+      var sum = 0
+      si --> foreach(sum += it) # foreach without changing the content works however
+      check(si --> reduce(it.accu + it.elem) == sum)
+      accept(si --> fold(0, a + it) == 6)
 
-    # on the other hand when converted to list or seq (or something with []) the list can be changed
-    var d = si --> to(list)
-    d --> foreach(it = it * 2)
-    let e: DoublyLinkedList[int] = d
-    discard(e) # just check it can be assigned
-    accept(d --> to(seq) == @[2, 4, 6])
+      # on the other hand when converted to list or seq (or something with []) the list can be changed
+      var d = si --> to(list)
+      d --> foreach(it = it * 2)
+      let e: DoublyLinkedList[int] = d
+      discard(e) # just check it can be assigned
+      accept(d --> to(seq) == @[2, 4, 6])
 
-    # zip also needs the [] operator - reject macro doesn't work a 100% - it is SimpleIter instead of Error Type
-    reject(zip(si, si2) --> map($it) != nil,
-        "need to provide an own implementation for mkIndexable(Error Type)") 
-    reject(si --> combinations() --> all(it[0] < it[1]), "Only index with len types supported for combinations")
-    accept(d --> combinations() --> all(it[0] < it[1]))
+      # zip also needs the [] operator - reject macro doesn't work a 100% - it is SimpleIter instead of Error Type
+      reject(zip(si, si2) --> map($it) != nil,
+          "need to provide an own implementation for mkIndexable(Error Type)") 
+      reject(si --> combinations() --> all(it[0] < it[1]), "Only index with len types supported for combinations")
+      accept(d --> combinations() --> all(it[0] < it[1]))
+    foo()
 
   test "zip with simpleIter":
     let si = initSimpleIter()
