@@ -1,5 +1,3 @@
-# zero-functional
-
 # zero-functional [![Build Status](https://github.com/zero-functional/zero-functional/workflows/CI/badge.svg?branch=master)](https://github.com/zero-functional/zero-functional/actions?query=branch%3Amaster)
 
 A library providing (almost) zero-cost chaining for functional abstractions in Nim.
