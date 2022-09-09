@@ -34,3 +34,4 @@ jobs:
       run: |
         nim --version
         nim --run --mm:arc c test.nim 
+        nim --run js test.nim
