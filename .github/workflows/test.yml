@@ -15,7 +15,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os:             [ubuntu-latest, windows-latest, macos-latest]
+        os:             [ubuntu-latest] 
+        # macos-latest really takes long and windows-latest fails with memory error in compilation (with nim stable, not with nim devel)
         nim-channel:    [stable, devel]
 
     name: ${{ matrix.os }}-${{ matrix.nim-channel }}
