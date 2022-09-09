@@ -1,23 +1,27 @@
 import macros, options, sets, lists, typetraits, strutils, tables
 
+proc zfName(n: string): string {.compileTime.} =
+  "_ZF_" & n
+
 const zfIteratorVariableName* = "it"
 const zfAccuVariableName* = "a"
 const zfIndexVariableName* = "idx"
-const zfListIteratorName* = "__itList__"
-const zfMinHighVariableName* = "__minHigh__"
-const zfInternalHelperProc* = "__iterType__"
-const zfInternalIteratorName* = "__autoIter__"
+const zfListIteratorName* = zfName("itList")
+const zfMinHighVariableName* = zfName("minHigh")
+const zfInternalHelperProc* = zfName("iterType")
+const zfInternalIteratorName* = zfName("autoIter")
+const zfIndexInner = zfName("idxInner")
 const zfIndexedElemName* = "elem"
 const zfIndexedIndexName* = "idx"
 const zfAccuName* = "accu"
 
 const zfArrow = "-->"
 const zfArrowDbg = "-->>"
-const callSuffix = "__call__"
-const internalIteratorName = "__" & zfIteratorVariableName
+const callSuffix = "ZF_Call"
+const internalIteratorName = "_" & zfIteratorVariableName
 const useInternalAccu = zfAccuVariableName != "result"
 const internalAccuName =
-  if (useInternalAccu): "__" & zfAccuVariableName
+  if (useInternalAccu): zfName("accu")
   else: "result"
 const zfMaxTupleSize = 10
 
@@ -56,7 +60,7 @@ proc printCode(code: NimNode) =
   for i in 0..<a.len:
     if a[i].contains("zfParamChk") or a[i].contains("zfIndexableChk"):
       a[i] = ""
-  c = a.join("\n").replace("\n\n", "\n").replace("__call__", callSuffix).replace("__", "")
+  c = a.join("\n").replace("\n\n", "\n").replace("__call__", callSuffix).replace("_ZF_", "").replace("_", "")
   echo(c)
 
 type
@@ -485,20 +489,20 @@ proc zfAddItemConvert*[T, U](a: var Iterable[T], idx: int, item: U) =
 ]#
 macro genZfAddItemTuple(maxTupleSize: static[int]): untyped =
   result = newStmtList()
-  idents(T, a, idx(zfIndexVariableName), item)
-  let t = newPar(T)
+  idents(tpe, a, idx(zfIndexVariableName), item)
+  let t = nnkTupleConstr.newTree(tpe)
   let cases = quote:
     case `idx`:
       of 0: `a`[0] = `item`
       else: assert(false)
   for l in 2..maxTupleSize:
-    t.add(T)
+    t.add(tpe)
     let l1 = l-1
     let c = quote:
       `a`[`l1`] = `item`
     cases.insert(l1, nnkOfBranch.newTree(newIntLitNode(l1), c))
     result.add quote do:
-      proc zfAddItem[`T`](`a`: var `t`, `idx`: int, `item`: `T`) =
+      proc zfAddItem[`tpe`](`a`: var `t`, `idx`: int, `item`: `tpe`) =
         `cases`
 genZfAddItemTuple(zfMaxTupleSize)
 
@@ -1077,7 +1081,7 @@ proc inlineMap*(ext: ExtNimNode) {.compileTime.} =
     let isInternal = label == internalIteratorName or label == zfIndexVariableName
     let v = ext.adapt()
     ext.node = nnkLetSection.newTree()
-    if v[0].kind in {nnkPar, nnkTupleConstr}:
+    if v[0].kind in {nnkTupleConstr}:
       # allow tuple unpacking: ((a,b) = c)
       # - but the unpacking is done manually to also allow assigning arrays or sequences
       for idx, varName in v[0]:
@@ -1462,7 +1466,7 @@ proc combineWithOtherCollection(ext: ExtNimNode, indexed: bool) {.compileTime.} 
     let listRef = ext.node[idx]
     idx += 1
     if indexed:
-      var idxInner = genSym(nskVar, "__idxInner__")
+      var idxInner = genSym(nskVar, zfIndexInner)
       indices.add(idxInner)
       code.add quote do:
         var `idxInner` = -1
@@ -1563,10 +1567,10 @@ macro genTupleSeqCalls(maxTupleSize: static[int]): untyped =
   result = newStmtList()
   for tupleNum in 2..maxTupleSize:
     let genIdents = nnkIdentDefs.newTree()
-    let paramIdents = newPar()
+    let paramIdents = nnkTupleConstr.newTree()
     let params = nnkFormalParams.newTree()
-    let retVal = newPar()
-    let calls = newPar()
+    let retVal = nnkTupleConstr.newTree()
+    let calls = nnkTupleConstr.newTree()
     for i in 0..tupleNum-1:
       # Generic param is [T1, T2, ...]
       genIdents.add(types[i].copyNimNode)
@@ -1805,7 +1809,7 @@ proc replaceZip(args: NimNode): NimNode {.compileTime.} =
     # search for all zip calls and replace them with filter --> map
     if arg.kind == nnkCall and arg[0].label == $Command.zip:
       let zipCmd = arg.copyNimTree()
-      let params = newPar()
+      let params = nnkTupleConstr.newTree()
       var namedTuple = true
       var createUniqueNames = false
       var names = initHashSet[string]()
@@ -1997,7 +2001,7 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool,
         zfFail("Tuple return types are only supported from 2 up to $1 elements" %
             [$zfMaxTupleSize])
       let x = genSym(nskVar, "x")
-      let tup = newPar()
+      let tup = nnkTupleConstr.newTree()
       for _ in 1..num:
         tup.add(x)
       code = quote:
@@ -2030,7 +2034,7 @@ proc createAutoProc(ext: ExtNimNode, args: NimNode, isSeq: bool,
 
     # in the proc replace the yield with result - returning all iterators in a tuple
     let path2 = itFun.findNodeParents(nnkYieldStmt)
-    let res = newPar()
+    let res = nnkTupleConstr.newTree()
     for i in 0..<ext.maxIndex:
       res.add(mkItNode(i))
     if path2.len > 1:
@@ -2450,7 +2454,7 @@ proc delegateMacro(a: NimNode, b1: NimNode, td: string,
   let args = nnkArglist.newTree()
   # re-arrange shortcut expression of (a --> itName) to alternative shortcut a --> (itName)
   if a.kind == nnkPar and a[0].kind == nnkInfix and a[0][0].label.startsWith(zfArrow):
-    args.add(nnkArglist.newTree(a[0][1])).add(newPar(a[0][2]))
+    args.add(nnkArglist.newTree(a[0][1])).add(nnkTupleConstr.newTree(a[0][2]))
   else:
     args.add(a)
 
@@ -2518,7 +2522,7 @@ macro zfun*(a: untyped, b: untyped): untyped =
     zfunCall(type(`a`), false, `a`, `b`)
 
 macro zfun*(a: untyped, b: untyped, c: untyped): untyped =
-  c.insert(0, newPar(b))
+  c.insert(0, nnkTupleConstr.newTree(b))
   result = quote:
     zfunCall(type(`a`), false, `a`, `c`)
 
@@ -2527,7 +2531,7 @@ macro zfunDbg*(a: untyped, b: untyped): untyped =
     zfunCall(type(`a`), true, `a`, `b`)
 
 macro zfunDbg*(a: untyped, b: untyped, c: untyped): untyped =
-  c.insert(0, newPar(b))
+  c.insert(0, nnkTupleConstr.newTree(b))
   result = quote:
     zfunCall(type(`a`), true, `a`, `c`)
 
@@ -2584,4 +2588,3 @@ macro `-->>`*(a: untyped, b: untyped): untyped =
   let dbg = b.dbgLineInfo(true)
   result = quote:
     arrowCall(`a`, `b2`, `dbg`)
-

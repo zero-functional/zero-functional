@@ -33,4 +33,7 @@ jobs:
       shell: bash
       run: |
         nim --version
-        nim --run --gc:arc c test.nim 
+        nim --run --mm:arc c test.nim 
+        nim --run --d:release c test.nim 
+        nim --run js test.nim
+        nim --run --d:release js test.nim
