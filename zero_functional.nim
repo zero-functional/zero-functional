@@ -1,23 +1,27 @@
 import macros, options, sets, lists, typetraits, strutils, tables
 
+proc zfName(n: string): string {.compileTime.} =
+  "_ZF_" & n.capitalizeAscii()
+
 const zfIteratorVariableName* = "it"
 const zfAccuVariableName* = "a"
 const zfIndexVariableName* = "idx"
-const zfListIteratorName* = "__itList__"
-const zfMinHighVariableName* = "__minHigh__"
-const zfInternalHelperProc* = "__iterType__"
-const zfInternalIteratorName* = "__autoIter__"
+const zfListIteratorName* = zfName("itList")
+const zfMinHighVariableName* = zfName("minHigh")
+const zfInternalHelperProc* = zfName("iterType")
+const zfInternalIteratorName* = zfName("autoIter")
+const zfIndexInner = zfName("idxInner")
 const zfIndexedElemName* = "elem"
 const zfIndexedIndexName* = "idx"
 const zfAccuName* = "accu"
 
 const zfArrow = "-->"
 const zfArrowDbg = "-->>"
-const callSuffix = "__call__"
-const internalIteratorName = "__" & zfIteratorVariableName
+const callSuffix = zfName("call")
+const internalIteratorName = "_" & zfIteratorVariableName
 const useInternalAccu = zfAccuVariableName != "result"
 const internalAccuName =
-  if (useInternalAccu): "__" & zfAccuVariableName
+  if (useInternalAccu): zfName("accu")
   else: "result"
 const zfMaxTupleSize = 10
 
@@ -1462,7 +1466,7 @@ proc combineWithOtherCollection(ext: ExtNimNode, indexed: bool) {.compileTime.} 
     let listRef = ext.node[idx]
     idx += 1
     if indexed:
-      var idxInner = genSym(nskVar, "__idxInner__")
+      var idxInner = genSym(nskVar, zfIndexInner)
       indices.add(idxInner)
       code.add quote do:
         var `idxInner` = -1
@@ -2584,4 +2588,3 @@ macro `-->>`*(a: untyped, b: untyped): untyped =
   let dbg = b.dbgLineInfo(true)
   result = quote:
     arrowCall(`a`, `b2`, `dbg`)
-

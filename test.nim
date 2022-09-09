@@ -688,7 +688,7 @@ suite "valid chains":
     check(@[1, 2, 3] --> map($it) --> to(list) is DoublyLinkedList[string])
 
   test "simple iterator":
-    proc foo = # a workaround for ARC/ORC which only perform intraprocedural analysis.
+    proc simpleIterator = # a workaround for ARC/ORC which only perform intraprocedural analysis.
       # the type SimpleIter is restricted
       # it does not define zfInit to initialize the type nor add (or append) to add elements
       # also the `[]=` operator is missing
@@ -716,7 +716,7 @@ suite "valid chains":
           "need to provide an own implementation for mkIndexable(Error Type)") 
       reject(si --> combinations() --> all(it[0] < it[1]), "Only index with len types supported for combinations")
       accept(d --> combinations() --> all(it[0] < it[1]))
-    foo()
+    simpleIterator()
 
   test "zip with simpleIter":
     let si = initSimpleIter()
