@@ -195,6 +195,22 @@ proc inlineRemove*(ext: ExtNimNode) {.compileTime.} =
           listRef.delete(idx)
           idx -= 1
 
+## divide input into chunks as sequences of given size
+zfInline chunks(size):
+  init:
+    var s = newSeqOfCap[typeof(it)](size)
+    var cntIdent = 0
+  loop:
+    s.add(it)
+    inc(cntIdent)
+    if cntIdent >= size:
+      cntIdent = 0
+      let it = s
+      s = newSeqOfCap[typeof(`prevIdent`)](size)
+      yield it
+  final:
+    yield s
+
 ## Registers the extensions for the user commands during compile time
 macro registerExtension(): untyped =
   # register all extensions that have been defined with the zfInline macro
@@ -942,6 +958,9 @@ suite "valid chains":
     reject(a --> intersect(), "'intersect' needs at least 1 parameter!")
 
     check(@[1, 2, 1, 1, 3, 2, 1, 1, 4] --> removeDoubles() == @[1, 2, 3, 4])
+
+  test "chunks":
+    check(countUp(0, 10) --> map(it).chunks(3) == @[@[0,1,2], @[3,4,5], @[6,7,8], @[9,10]])
 
   test "zip with other list":
     let a = @[1, 2, 3]
