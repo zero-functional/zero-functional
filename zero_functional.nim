@@ -24,6 +24,7 @@ const internalAccuName =
   if (useInternalAccu): zfName("accu")
   else: "result"
 const zfMaxTupleSize = 10
+const zfFinalYield = zfName("finalYield")
 
 # if set to true: turns on prints code generated with zf (for macros -->, zfun and connect)
 when defined(zf_debug_all):
@@ -989,10 +990,19 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
             `cmd`
           `ext`.endLoop.add(e)
       of "final":
-        code.add quote do:
-          let f = quote:
-            `cmd`
-          `ext`.finals.add(f)
+        let path = cmd.findNodeParents(nnkYieldStmt)
+        if path.len > 1:
+          let item = path[0][0]
+          let finalYield = newIdentNode(zfFinalYield)
+          code.add quote do:
+            let f = quote:
+              `finalYield`(`item`)
+            `ext`.finals.add(f)
+        else:
+          code.add quote do:
+            let f = quote:
+              `cmd`
+            `ext`.finals.add(f)
       else:
         doAssert(false, "unsupported keyword: " & tpe)
 
@@ -2291,9 +2301,16 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
   # add the actual loop section
   init.add(codeStart)
 
+  let finalsAddAfter = newStmtList()
   # add the finals section
   if finals.len > 0:
-    init.add(finals)
+    # hack to add the `yield elem` to the finals section - which actually only adds the elem to the result
+    let path = finals.findNodeParents(nnkIdent, zfFinalYield)
+    if path.len > 1 and path[1].len > 1:
+      let elem = path[1][1]
+      finalsAddAfter.add(ext.addElemResult(elem))
+    else:      
+      init.add(finals)
 
   let needsFunction = (lastCall != $Command.foreach)
   if needsFunction:
@@ -2324,11 +2341,14 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
 
     if preInit.len > 0:
       code.insert(0, preInit)
+    if (finalsAddAfter.len > 0):
+      code.add(finalsAddAfter)
     if ((not isIter) or toIter) and (not defined(js) or not toIter):
       # kind of a hack: with JS backend and toIter we do not add additioal brackets to the call
       # here a seq is returned, but is used later the same way iterators would: with additional brackets
       result = nnkCall.newTree(result)
   else:
+    init.add(finalsAddAfter)
     # there is no extra function, but at least we have an own section here - preventing double definitions
     var q = quote:
       block:
