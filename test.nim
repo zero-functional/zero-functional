@@ -962,7 +962,7 @@ suite "valid chains":
 
   test "chunks":
     check(countUp(0, 10) --> map(it).chunks(3) == @[@[0,1,2], @[3,4,5], @[6,7,8], @[9,10]])
-    check(countUp(0, 1) -->> map(it).chunks(2) == @[@[0,1]])
+    check(countUp(0, 1) --> map(it).chunks(2) == @[@[0,1]])
 
   test "zip with other list":
     let a = @[1, 2, 3]
