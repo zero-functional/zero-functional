@@ -675,7 +675,7 @@ The sections directly map to their counterparts in `ExtNimNode`:
 - `loop` the actual loop action (maps to `ext.node`)
 - `delegate` delegate to other functions (like map, filter, etc.)
 - `endLoop` added to end of the loop
-- `final` after the loop section - e.g. to set the result
+- `final` after the loop section - e.g. to set the result or yield the remaining data
 
 Let's dissect the (simple) map implementation:
 ``` nim
@@ -739,6 +739,7 @@ Special variables for `zfInline` statements are:
 All other variables have to be defined in the `pre`-section, also when automatically assigned, e.g. when overriding the `idx` variable or when accessing a reference to the list as `listRef`.
 See `intersect` or `removeDoubles` implementation in [test.nim](test.nim) as an example.
 - `yield it`: opposed to setting the result this means that an iterator or a collection result is returned with `it` being added to it.
+- `yield <varname>` in `final` section: the `<varname>` is added to the result at the end
 
 #### Setting the result
 Example of `count` that sets a result:
