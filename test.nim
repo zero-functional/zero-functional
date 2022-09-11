@@ -1,4 +1,4 @@
-import unittest, zero_functional, options, lists, macros, strutils, tables
+import unittest, zero_functional, options, lists, macros, strutils, tables, sets
 
 # different sequences
 let a = @[2, 8, -4]
@@ -196,19 +196,24 @@ proc inlineRemove*(ext: ExtNimNode) {.compileTime.} =
           idx -= 1
 
 ## divide input into chunks as sequences of given size
-zfInline chunks(size):
+zfInline chunks(size: int):
   init:
     var s = newSeqOfCap[typeof(it)](size)
-    var cntIdent = 0
+    # need an own counter since `idx` will count the outer loop (including filtered elements)
+    var cnt = 0
   loop:
     s.add(it)
-    inc(cntIdent)
-    if cntIdent >= size:
-      cntIdent = 0
+    cnt.inc()
+    if cnt mod size == 0:
+      # `it` here refers to the loop iterator
+      let nextSeq = newSeqOfCap[typeof(it)](size)
+      # need to set next `it` to the yield result since only `yield it` is supported in loops
       let it = s
-      s = newSeqOfCap[typeof(`prevIdent`)](size)
+      s = nextSeq
       yield it
   final:
+    # in final statement it is possible to use `yield` with an outer variable
+    # there is no `it` available in final section.
     if s.len > 0:
       yield s
 
@@ -963,6 +968,7 @@ suite "valid chains":
   test "chunks":
     check(countUp(0, 10) --> map(it).chunks(3) == @[@[0,1,2], @[3,4,5], @[6,7,8], @[9,10]])
     check(countUp(0, 1) --> map(it).chunks(2) == @[@[0,1]])
+    check(1..10 --> filter(it mod 2 == 0).chunks(2) == @[@[2, 4], @[6, 8], @[10]])
 
   test "zip with other list":
     let a = @[1, 2, 3]
