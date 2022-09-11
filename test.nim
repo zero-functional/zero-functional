@@ -672,14 +672,18 @@ suite "valid chains":
     # array dimensions must be explicitly given
     # comparison seq to array works now - but automatically converting to an array
     # needs the array size to prevent a runtime error overwriting the bounds.
-    # reject(fArray --> flatten() --> to(array) == [1,2,3,4,5,6])
-    check((fArray --> flatten() --> to(array[6, int])) == [1, 2, 3, 4, 5, 6])
+    # check(fArray --> flatten() --> to(array) == [1,2,3,4,5,6]) # runtime error
+    check(fArray --> flatten() --> to(array[6, int]) == [1, 2, 3, 4, 5, 6])
     # if the array is too big, the array is filled with default zero
-    check((fArray --> flatten() --> to(array[8, int])) == [1, 2, 3, 4, 5, 6, 0, 0])
-    # if the array is too small we get a runtime error
+    check(fArray --> flatten() --> to(array[8, int]) == [1, 2, 3, 4, 5, 6, 0, 0])
+    # if the array is too small we will get a runtime error since the destination array is too small
+    # fArray --> flatten() --> to(array[2, int]) # runtime error
+
+    # result element type must match
+    reject(fArray --> flatten() --> to(array[6, string]), "Result type 'array[6, string]' and added item of type 'int' do not match!")
 
     # list is flattened to seq by default
-    accept((fList --> flatten()) == fSeq)
+    accept(fList --> flatten() == fSeq)
 
   test "rejected missing add function":
     let p2 = PackWoAdd(rows: @[0, 1, 2, 3])
