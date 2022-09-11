@@ -615,6 +615,15 @@ suite "valid chains":
         it < 6.0) --> to(list))
     checkSame(e, @[2.5, 5.0])
 
+  test "create set":
+    # creating a set a s a result
+    # it is possible to explicitly set the output type to HashSet[type] or just to use `set`
+    check(1..5 --> to(set) == toHashSet([1,3,5,4,2]))
+    check(1..5 --> to(HashSet) == toHashSet([1,3,5,4,2]))
+    check(1..5 --> to(set[int]) == toHashSet([1,3,5,4,2]))
+    check(1..5 --> to(HashSet[int]) == toHashSet([1,3,5,4,2]))
+    check((1..5) --> to(OrderedSet[int]) == @[1,2,3,4,5])
+
   test "combinations":
     ## get indices of items where the difference of the elements is 1
     let items = @[1, 5, 2, 9, 8, 3, 11]
