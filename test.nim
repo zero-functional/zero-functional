@@ -1,4 +1,4 @@
-import unittest, zero_functional, options, lists, macros, strutils, tables
+import unittest, zero_functional, options, lists, macros, strutils, tables, sets
 
 # different sequences
 let a = @[2, 8, -4]
@@ -196,19 +196,24 @@ proc inlineRemove*(ext: ExtNimNode) {.compileTime.} =
           idx -= 1
 
 ## divide input into chunks as sequences of given size
-zfInline chunks(size):
+zfInline chunks(size: int):
   init:
     var s = newSeqOfCap[typeof(it)](size)
-    var cntIdent = 0
+    # need an own counter since `idx` will count the outer loop (including filtered elements)
+    var cnt = 0
   loop:
     s.add(it)
-    inc(cntIdent)
-    if cntIdent >= size:
-      cntIdent = 0
+    cnt.inc()
+    if cnt mod size == 0:
+      # `it` here refers to the loop iterator
+      let nextSeq = newSeqOfCap[typeof(it)](size)
+      # need to set next `it` to the yield result since only `yield it` is supported in loops
       let it = s
-      s = newSeqOfCap[typeof(`prevIdent`)](size)
+      s = nextSeq
       yield it
   final:
+    # in final statement it is possible to use `yield` with an outer variable
+    # there is no `it` available in final section.
     if s.len > 0:
       yield s
 
@@ -610,6 +615,15 @@ suite "valid chains":
         it < 6.0) --> to(list))
     checkSame(e, @[2.5, 5.0])
 
+  test "create set":
+    # creating a set a s a result
+    # it is possible to explicitly set the output type to HashSet[type] or just to use `set`
+    check(1..5 --> to(set) == toHashSet([1,3,5,4,2]))
+    check(1..5 --> to(HashSet) == toHashSet([1,3,5,4,2]))
+    check(1..5 --> to(set[int]) == toHashSet([1,3,5,4,2]))
+    check(1..5 --> to(HashSet[int]) == toHashSet([1,3,5,4,2]))
+    check((1..5) --> to(OrderedSet[int]) == @[1,2,3,4,5])
+
   test "combinations":
     ## get indices of items where the difference of the elements is 1
     let items = @[1, 5, 2, 9, 8, 3, 11]
@@ -658,14 +672,18 @@ suite "valid chains":
     # array dimensions must be explicitly given
     # comparison seq to array works now - but automatically converting to an array
     # needs the array size to prevent a runtime error overwriting the bounds.
-    # reject(fArray --> flatten() --> to(array) == [1,2,3,4,5,6])
-    check((fArray --> flatten() --> to(array[6, int])) == [1, 2, 3, 4, 5, 6])
+    # check(fArray --> flatten() --> to(array) == [1,2,3,4,5,6]) # runtime error
+    check(fArray --> flatten() --> to(array[6, int]) == [1, 2, 3, 4, 5, 6])
     # if the array is too big, the array is filled with default zero
-    check((fArray --> flatten() --> to(array[8, int])) == [1, 2, 3, 4, 5, 6, 0, 0])
-    # if the array is too small we get a runtime error
+    check(fArray --> flatten() --> to(array[8, int]) == [1, 2, 3, 4, 5, 6, 0, 0])
+    # if the array is too small we will get a runtime error since the destination array is too small
+    # fArray --> flatten() --> to(array[2, int]) # runtime error
+
+    # result element type must match
+    reject(fArray --> flatten() --> to(array[6, string]), "Result type 'array[6, string]' and added item of type 'int' do not match!")
 
     # list is flattened to seq by default
-    accept((fList --> flatten()) == fSeq)
+    accept(fList --> flatten() == fSeq)
 
   test "rejected missing add function":
     let p2 = PackWoAdd(rows: @[0, 1, 2, 3])
@@ -963,6 +981,7 @@ suite "valid chains":
   test "chunks":
     check(countUp(0, 10) --> map(it).chunks(3) == @[@[0,1,2], @[3,4,5], @[6,7,8], @[9,10]])
     check(countUp(0, 1) --> map(it).chunks(2) == @[@[0,1]])
+    check(1..10 --> filter(it mod 2 == 0).chunks(2) == @[@[2, 4], @[6, 8], @[10]])
 
   test "zip with other list":
     let a = @[1, 2, 3]
