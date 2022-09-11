@@ -990,19 +990,18 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
             `cmd`
           `ext`.endLoop.add(e)
       of "final":
-        let path = cmd.findNodeParents(nnkYieldStmt)
+        var path = cmd.findNodeParents(nnkYieldStmt)
         if path.len > 1:
+          # replace yield statement in final section
           let item = path[0][0]
           let finalYield = newIdentNode(zfFinalYield)
-          code.add quote do:
-            let f = quote:
-              `finalYield`(`item`)
-            `ext`.finals.add(f)
-        else:
-          code.add quote do:
-            let f = quote:
-              `cmd`
-            `ext`.finals.add(f)
+          let q = quote:
+            `finalYield`(`item`)
+          cmd.replace(path[0], q, true)
+        code.add quote do:
+          let f = quote:
+            `cmd`
+          `ext`.finals.add(f)
       else:
         doAssert(false, "unsupported keyword: " & tpe)
 
@@ -1023,7 +1022,7 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
     # special syntax allowing yield it
     let path = q.findNodeParents(nnkYieldStmt)
     if path.len > 1:
-      path[1].replace(path[0], nil)
+      q.replace(path[0], nil, true)
     result = q
   else:
     if header.kind != nnkCall:
@@ -2308,7 +2307,8 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
     let path = finals.findNodeParents(nnkIdent, zfFinalYield)
     if path.len > 1 and path[1].len > 1:
       let elem = path[1][1]
-      finalsAddAfter.add(ext.addElemResult(elem))
+      finals.replace(path[1], ext.addElemResult(elem), true)
+      finalsAddAfter.add(finals)
     else:      
       init.add(finals)
 
