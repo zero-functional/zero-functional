@@ -272,12 +272,12 @@ proc getNilStmtParent(node: NimNode): (NimNode, int) =
 
 ## Helper that gets nnkStmtList and removes a 'nil' inside it - if present.
 ## The nil is used as placeholder for further added code.
-proc getStmtList*(node: NimNode, removeNil = true) : NimNode =
-  if removeNil:
-    let parent = node.getNilStmtParent()
-    if parent[0] != nil:
-      parent[0].del(parent[1])
-      return parent[0]
+proc getStmtList*(node: NimNode) : NimNode =
+  let (p, i) = node.getNilStmtParent()
+  if p != nil:      
+    p.replace(p[i], newStmtList())
+    return p[i]
+
   var n = node
   while n.kind != nnkStmtList or (n.len > 0 and n.last.kind == nnkStmtList):
     n = n.last
@@ -2326,6 +2326,7 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
     else:
       theProc = ext.createAutoProc(args, isSeq, resultType, td, init, index > 1, false)
     result = theProc
+
     code = result.last.getStmtList()
 
     if isIter:
@@ -2340,7 +2341,9 @@ proc iterHandler(args: NimNode, td: string, debugInfo: string): NimNode {.compil
       code.insert(0, init)
 
     if preInit.len > 0:
-      code.insert(0, preInit)
+      let preCode = result.findNode(nnkStmtList)
+      preCode.insert(0, preInit)
+
     if (finalsAddAfter.len > 0):
       code.add(finalsAddAfter)
     if ((not isIter) or toIter) and (not defined(js) or not toIter):
