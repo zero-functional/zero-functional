@@ -206,12 +206,8 @@ zfInline chunks(size: int):
     s.add(it)
     cnt.inc()
     if cnt mod size == 0:
-      # `it` here refers to the loop iterator
-      let nextSeq = newSeqOfCap[typeof(it)](size)
-      # need to set next `it` to the yield result since only `yield it` is supported in loops
-      let it = s
-      yield it
-      s = nextSeq
+      yield s
+      s = newSeqOfCap[typeof(it)](size)
   final:
     # in final statement it is possible to use `yield` with an outer variable
     # there is no `it` available in final section.
@@ -979,7 +975,7 @@ suite "valid chains":
 
     check(@[1, 2, 1, 1, 3, 2, 1, 1, 4] --> removeDoubles() == @[1, 2, 3, 4])
     
-    # removeDoubles only works on the original input - however it is possible to split
+    # `removeDoubles` only works on the original input - however it is possible to split
     # operations and first create an iterator from the input (and filters and so forth)
     # and then apply `removeDoubles` on that iterator
     const items = @[1, -1, 2, 1, -2, 1, 3, 2, -2, 1, 1, 4]; 

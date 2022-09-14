@@ -905,11 +905,31 @@ proc zeroParse(header: NimNode, body: NimNode): NimNode =
         `ext`.needsIndex = true
       quotedVars[zfIndexVariableName] = "idxIdent"
 
-    if not (hasPre or body[0].label == "delegate") or
-        not (body.len == 2 and body[1].label == "delegate"):
+    idents(nextIt("nextIdent"), prevIt("prevIdent"))
+    var hasPrevNext = not (hasPre or body[0].label == "delegate") or
+        not (body.len == 2 and body[1].label == "delegate")
+    if hasPrevNext:
       # replace it in 'it = ...' with `nextIt` and create the next iterator
-      idents(nextIt("nextIdent"), prevIt("prevIdent"))
       discard body.replaceIt(nnkAccQuoted.newTree(nextIt), nnkAccQuoted.newTree(prevIt))
+
+    # do some upfront parsing - replace yield <name> by let it = name; yield it
+    for i in 0..<body.len:
+      if body[i].label == "loop":
+        let cmd = body[i][1]
+        let y = cmd.findNodeParents(nnkYieldStmt)
+        if y.len > 0:
+          if y[0].findIdent(zfIteratorVariableName) == nil:
+            let it = newIdentNode(zfIteratorVariableName)
+            let yieldedVar = y[0][0]
+            let q = quote:
+              let `it` = `yieldedVar`
+              yield `it`
+            discard q.replaceIt(nnkAccQuoted.newTree(nextIt), nnkAccQuoted.newTree(prevIt))
+            cmd.replace(y[0], q, true)
+            hasPrevNext = true
+        break
+
+    if hasPrevNext:
       symDefs["prevIdent"] = quote:
         let `prevIt` = `ext`.prevItNode()
       symDefs["nextIdent"] = quote:
@@ -1164,8 +1184,8 @@ zfInline uniq():
   loop:
     if not initialized or prev != it:
       initialized = true
-      prev = it
       yield it
+      prev = it
 
 ## Implementation of `partition` command.
 ## Applies each element to the discriminator function and sorts the elements a tuple with to sequences.
@@ -1206,11 +1226,10 @@ zfInline flatten():
     var idxFlatten = -1
   loop:
     for flattened in it:
-      let it = flattened
       idxFlatten += 1
       let `idx` = idxFlatten
+      yield flattened
       discard(`idx`)
-      yield it
 
 zfInline indexedFlatten():
   pre:
@@ -1223,10 +1242,9 @@ zfInline indexedFlatten():
     for flattened in it:
       idxInner += 1
       idxFlatten += 1
-      let it = mkIndexedResult(idxInner, flattened)
       let `idx` = idxFlatten # overwrite the idx variable (if present)
+      yield mkIndexedResult(idxInner, flattened)
       discard(`idx`)
-      yield it
 
 ## Implementation of the `takeWhile` command.
 ## `takeWhile(cond)` : Take all elements as long as the given condition is true.
