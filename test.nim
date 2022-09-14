@@ -134,19 +134,20 @@ zfInline intersectFast(_):
   pre:
     var itIdent = ext.prevItNode()
     let lists = ext.node
+    # lists is now pointing to intersectFast(list1, list2, ..., listN)
     ext.node = nnkStmtList.newTree()
     var codePtr = ext.node
 
     # iterate over all collections (first collection already iterated)
+    # index 0 is `intersectFast` itself, rest contains the names of the lists
     for idx in 1..lists.len - 1:
       let listRef = lists[idx]
-      var prev = itIdent
+      let prevIter = itIdent
       itIdent = ext.nextItNode()
       codePtr = codePtr.getStmtList().add quote do:
         for `itIdent` in `listRef`:
-          if `itIdent` == `prev`:
-            block: # must use block here because we need a statement list that replaces nil
-              nil
+          if `itIdent` == `prevIter`:
+            yield `itIdent`
             break
 
 zfInline removeDoubles():
@@ -205,12 +206,8 @@ zfInline chunks(size: int):
     s.add(it)
     cnt.inc()
     if cnt mod size == 0:
-      # `it` here refers to the loop iterator
-      let nextSeq = newSeqOfCap[typeof(it)](size)
-      # need to set next `it` to the yield result since only `yield it` is supported in loops
-      let it = s
-      s = nextSeq
-      yield it
+      yield s
+      s = newSeqOfCap[typeof(it)](size)
   final:
     # in final statement it is possible to use `yield` with an outer variable
     # there is no `it` available in final section.
@@ -293,7 +290,7 @@ suite "valid chains":
 
   test "basic zip":
     check((zip(a, b, c) --> filter(it[0] > 0 and it[2] == "one")) == @[(8, 1, "one")])
-
+  
   test "map":
     check((a --> map(it - 1)) == @[1, 7, -5])
 
@@ -977,11 +974,22 @@ suite "valid chains":
     reject(a --> intersect(), "'intersect' needs at least 1 parameter!")
 
     check(@[1, 2, 1, 1, 3, 2, 1, 1, 4] --> removeDoubles() == @[1, 2, 3, 4])
+    
+    # `removeDoubles` only works on the original input - however it is possible to split
+    # operations and first create an iterator from the input (and filters and so forth)
+    # and then apply `removeDoubles` on that iterator
+    const items = @[1, -1, 2, 1, -2, 1, 3, 2, -2, 1, 1, 4]; 
+    items --> filter(it > 0) --> createIter(filtered)
+    check(filtered() --> removeDoubles() == @[1, 2, 3, 4])
+    # here we can also go the other way - but that ought to be more inefficient since 
+    # `combinations` has quadratic runtime (O(n^2))
+    check(items --> removeDoubles() --> filter(it > 0) == @[1, 2, 3, 4])
 
   test "chunks":
     check(countUp(0, 10) --> map(it).chunks(3) == @[@[0,1,2], @[3,4,5], @[6,7,8], @[9,10]])
     check(countUp(0, 1) --> map(it).chunks(2) == @[@[0,1]])
     check(1..10 --> filter(it mod 2 == 0).chunks(2) == @[@[2, 4], @[6, 8], @[10]])
+    check(1..12 --> filter(it mod 2 == 0).chunks(3) == @[@[2, 4, 6], @[8, 10, 12]])
 
   test "zip with other list":
     let a = @[1, 2, 3]
