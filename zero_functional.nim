@@ -1180,24 +1180,19 @@ proc zfFirstItem*(iter: Iterable): auto =
 zfInline uniq():
   init:
     var prev: type(it)
-    var initialized = false
   loop:
-    if not initialized or prev != it:
-      initialized = true
-      yield it
+    if prev != it:
       prev = it
+      yield it
 
 ## Implementation of `partition` command.
 ## Applies each element to the discriminator function and sorts the elements a tuple with to sequences.
 ## The named tuple element `yes` contains all the elements matching the filter, `no` contains the rest.
 zfInline partition(discriminator: bool):
-  init:
-    var initialized = false
   loop:
-    if not initialized:
+    once:
       result = (yes: newSeq[type(it)](),
                 no: newSeq[type(it)]())
-      initialized = true
     if discriminator:
       result.yes.add(it)
     else:
@@ -1207,12 +1202,9 @@ zfInline partition(discriminator: bool):
 ## Applies each element to the discriminator and adds the result to a table as key adding the elements to a sequence
 ## for each key.
 zfInline group(discriminator):
-  init:
-    var initialized = false
   loop:
-    if not initialized:
+    once:
       result = initOrderedTable[type(discriminator), seq[type(it)]]()
-      initialized = true
     result.mgetOrPut(discriminator, @[]).add(it)
 
 ## Implementation of the 'flatten' command.
